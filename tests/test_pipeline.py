@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(ROOT))
 
-from scripts.gate_checks import check_storyboard
+from scripts.gate_checks import REF_DUTIES, check_storyboard
 
 
 def write_wav(path: Path, duration: float, silence: bool = False) -> None:
@@ -42,7 +42,23 @@ class PipelineTests(unittest.TestCase):
             [sys.executable, str(SCRIPTS / name), *(str(arg) for arg in args)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
+
+    def test_zy_cinematic_vendor_keeps_license_and_mv_boundary(self):
+        vendor = ROOT / "vendor" / "zy-cinematic-realism"
+        self.assertTrue((vendor / "SKILL.md").is_file())
+        self.assertIn("CC BY-NC 4.0", (vendor / "LICENSE").read_text(encoding="utf-8"))
+        self.assertIn("popopo-99", (vendor / "NOTICE.md").read_text(encoding="utf-8"))
+        integration = (ROOT / "references" / "zy-cinematic-integration.md").read_text(
+            encoding="utf-8")
+        for protected_field in ("window", "lyric_text", "lip_sync", "audio_policy"):
+            self.assertIn(protected_field, integration)
+
+    def test_character_reference_can_lock_wardrobe(self):
+        self.assertIn("wardrobe", REF_DUTIES)
+        framework = (ROOT / "references" / "prompt-framework.md").read_text(encoding="utf-8")
+        self.assertIn("likeness + wardrobe", framework)
 
     def test_fallback_keeps_many_lyrics_inside_short_silent_audio(self):
         with tempfile.TemporaryDirectory() as tmp:

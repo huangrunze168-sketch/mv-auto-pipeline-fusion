@@ -6,11 +6,11 @@ description: >
   触发词：做 MV、音乐视频、口型对齐、MV 流水线、给这首歌出画面。
 ---
 
-# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.2.0）
+# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.3.1）
 
 > 一句话需求：**给一首歌和一张图，出来一支完整的、口型对得上的音乐 MV。**
 > 技术基线：全 API（无需 GPU）· 运行形态：Agent Skill。
-> V1.2.0：经 mv-test-01 真实产出反推 8 项修复，补齐降级对齐 / 分镜推导 / 静帧预览三条工具链，详见 CHANGELOG.md。
+> V1.3.1：真实 16:9 试产补齐提示词派生、门禁落盘和人物五官/服装参考职责锁；预览保持参考图原始比例。详见 CHANGELOG.md。
 
 ## 输入 / 输出
 
@@ -18,7 +18,7 @@ description: >
 
 - 一首歌（必需）：mp3 / wav / flac / m4a
 - 官方歌词（强烈建议）：没有也能跑，但 ASR 必有错字，歌词待核行需要你点头
-- 主人公图（可选）：不给走无主角模式，全程空镜 / 群像 / 道具 / 背影承载
+- 主人公图（可选）：默认只锁 `likeness + wardrobe`（五官、发型、耳饰、服装），不继承构图、背景或灯光；不给走无主角模式
 
 **它还你**
 
@@ -47,7 +47,7 @@ project/
 | 2 | 风格锁定：必须先于资产，服装色调都依赖风格 → style.json | 关 2 | |
 | 3 | 人物与资产：主人公图指纹化、母带全片只上传一次；无主角模式跳过 | 关 3 | |
 | 4 | 分镜设计：按歌曲线切段，切点只落在歌词行尾 / 间奏边界；逐段定口型策略与景别 → storyboard.json | 关 4 | |
-| 5 | 提示词派生：六段式结构 + 唱歌专用框架，**14 项机检全绿才放行**（11 基础 + 3 扩展项） | 关 5 | ⛔ 硬 |
+| 5 | 提示词派生：先用 ZY Cinematic Realism 完成 Scene Master → Creative Grammar，再降级映射为 MV 六段式结构 + 唱歌专用框架，**14 项机检全绿才放行**（11 基础 + 3 扩展项） | 关 5 | ⛔ 硬 |
 | 6 | 音乐窗口与口型核对：窗口首尾相接、合计=全曲长、口型与景别一致，**任何环节不许手写秒数** | 关 6 | ⛔ 硬 |
 | 7 | 工作流体检 + 首镜试产：先拉真实节点表再提交；首镜实测契约 / 分辨率 / 音频策略。**前置门限：视频生成后端必须由用户提供（名称 / 凭证 / 并发 / 真钱封顶），skill 只提问不内置；未提供则流程止步于关 6 + 静帧预览成片** | | |
 | 8 | 批量生成：多路并发、断点续跑、在途任务救回；每 10–15 分钟主动汇报 | | |
@@ -71,10 +71,12 @@ project/
 
 - **降级对齐**（`scripts/timeline_fallback.py`）：无 ASR key 时按能量起点 + 均匀分布生成试跑时间轴，全行 pending_review 待用户点头；**不可用于口型正式成片**。
 - **分镜推导**（`scripts/storyboard_build.py`）：窗口帧吸附（边界数组法）+ 口型节奏规则 + 景别轮转，产出即过关 6。
-- **静帧预览成片**（`scripts/render_preview.py`）：无视频 API 时主人公图 Ken Burns + 母带重贴，验证全链对齐；口型需走 API 通路。
+- **提示词派生**（`scripts/prompt_build.py`）：从已锁定时间轴、风格、分镜和人物指纹生成六段式提示词；人物图固定五官/服装但不接管场景。
+- **静帧预览成片**（`scripts/render_preview.py`）：无视频 API 时主人公图等比前景 + 模糊填充 + Ken Burns + 母带重贴，验证全链对齐；口型需走 API 通路。
 - **时长贴合**（`scripts/duration_fit.py`）：帧网格对齐（护栏 1e-4），帧数已合时流复制跳过重编码；计量用 nb_frames/fps，不信容器时长。
 - **对齐三验**（`scripts/align_verify.py`）：包络 + 局部搜索，纯标准库：① 各段时长合计 = 原曲长 ② 逐段波形最优滞后 ≈ 0 且相关度达标 ③ 对口型段人声能量非空。
 - **成本台账**（`scripts/ledger.py`）：币与真钱分列，调度动作全留痕；总览三数——成片多少秒、机器跑了多久、花了多少。
+- **电影化提示词构造**（`references/zy-cinematic-integration.md`）：使用 `vendor/zy-cinematic-realism/` 的 Scene Master、Creative Grammar、连续性与局部修复方法；只负责视觉构造，不得改写 timeline 窗口、歌词、口型、音频策略或后端契约。
 - **后端门限**：视频生成后端（普通镜头 / 口型镜头）一律由用户提供，skill 只提问（后端名称、凭证、并发、真钱封顶），**不内置任何后端适配代码与默认值**；未提供后端时交付物止于关 1–6 + 静帧预览成片。
 - **凭证四级读取**：会话级 → 项目级 → 用户级 → 环境变量，用户级跨项目永久生效，永远不再问用户要 key。
 
@@ -89,5 +91,6 @@ project/
 - `references/data-schemas.md` — timeline / storyboard / prompt / ledger 全 schema
 - `references/gates-spec.md` — 八道关逐项机检规格
 - `references/prompt-framework.md` — 六段式提示词框架与 14 项机检
+- `references/zy-cinematic-integration.md` — ZY Cinematic Realism → MV 六段式提示词适配与优先级
 - `references/api-backends.md` — 全 API 依赖清单与成本模型
-- `vendor/cinematic-frame-craft/` — 画面提示词工程组件库（内置，步骤 5 派生时按需加载：其 SKILL.md 为场景理解→画面提示词的编译流程，`references/` 含导演卡库 / 镜头光线 / 连续性卡 / 参考图解析 / 结果修复卡）
+- `vendor/zy-cinematic-realism/` — 造梦师 v2.5.0 原名上游组件（步骤 5 按需加载；CC BY-NC 4.0，作者 ZY / popopo-99，详见目录内 `LICENSE` / `NOTICE.md`）

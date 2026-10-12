@@ -2,6 +2,13 @@
 
 > 铁律 C 的完整落地。六段式结构 × 导演 Agent 出稿 × 派生顺序纪律（具体瞬间 / 场景母版 / 导演轴 / 参考职责 / 局部修复判定）。
 
+## 零、电影化构造前置层
+
+每镜先按 [`zy-cinematic-integration.md`](zy-cinematic-integration.md) 调用内置
+`vendor/zy-cinematic-realism/`：建立 Scene Master，选择必要的 Creative Grammar，完成具体瞬间、人物调度、空间层次、实际光源与物理可行机位。然后才把结果映射到下述六个字段。
+
+该前置层没有时间轴权限：不得修改 `window / duration_sec / lyric_line / lyric_text / lip_sync / shot_type / audio_policy`。上游模型适配器面向静帧；只有在制作参考帧时使用其模型原生语法，视频生成提示词默认采用模型中立表达，并服从实际视频后端契约。
+
 ## 一、六段式结构（一个字段都不能少）
 
 | 段 | 字段 | 语言 | 派生顺序 | 内容要求 |
@@ -46,11 +53,11 @@ style.json 可挂 `director_ref`（如 `{"name": "王家卫", "intensity": "轻�
 `meta.reference_duties` 声明每张参考图只管什么：
 
 ```json
-"reference_duties": ["likeness", "lighting"]
+  "reference_duties": ["likeness", "wardrobe"]
 ```
 
-- 枚举：`composition / color / lighting / material / likeness / none`（机检 #14）。
-- 主人公图只担 `likeness`；风格参考图只取「规律」（冷色实际光源+小面积暖色亮点这类关系），**不搬内容**——参考里的公交、侦探、服装不随图迁移。
+- 枚举：`composition / color / lighting / material / likeness / wardrobe / none`（机检 #14）。
+- 主人公图必须同时承担 `likeness + wardrobe`：锁定五官比例、发型、耳饰、服装版型/纹样/层次；不得继承参考图的构图、背景和灯光。风格参考图只取「规律」，**不搬内容**。
 - 关 3 资产关执行同一规则：上传时即登记职责，指纹缓存按「指纹+职责」双键。
 
 ## 五、唱歌专用规范
@@ -95,7 +102,7 @@ style.json 可挂 `director_ref`（如 `{"name": "王家卫", "intensity": "轻�
 |---|---|---|
 | 12 | 具体瞬间 | performance ≥10 字且含至少一个具体动作词（词表内置 gate_checks.py） |
 | 13 | 场景母版一致 | style.json 有已锁定 scene_master 时，本镜 scene 命中 ≥1 个锁定空间/光源/道具关键词 |
-| 14 | 参考职责声明 | `reference_duties` 每项 ∈ 六值枚举；有主人公图时必须含 `likeness` |
+| 14 | 参考职责声明 | `reference_duties` 每项在枚举内；有主人公图时必须同时含 `likeness + wardrobe` |
 
 ## 七、局部修复判定 —— 步骤 9 重抽卡的前置层
 

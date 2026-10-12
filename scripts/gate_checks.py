@@ -16,7 +16,12 @@ import re
 import subprocess
 import sys
 import hashlib
+import html
+from datetime import datetime
 from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 LIPSYNC_WHITELIST = {"大特写", "特写", "近景", "中景"}
 SIX_SECTIONS = ["style", "scene", "subject", "performance", "camera", "audio_policy"]
@@ -30,7 +35,7 @@ CLOSED_LIP_DECL = "嘴唇自然闭合"
 ACTION_WORDS = ["抬", "握", "拿", "放", "坐", "站", "走", "跑", "跪", "靠", "推",
                 "拉", "翻", "合", "转", "低头", "抬头", "回", "垂", "抱", "递",
                 "拨", "点", "写", "穿", "脱", "擦", "点", "迈", "俯", "仰"]
-REF_DUTIES = {"composition", "color", "lighting", "material", "likeness", "none"}
+REF_DUTIES = {"composition", "color", "lighting", "material", "likeness", "wardrobe", "none"}
 
 
 def sha256_file(p: Path) -> str:
@@ -41,6 +46,65 @@ def sha256_file(p: Path) -> str:
 
 def load(p: Path):
     return json.loads(p.read_text(encoding="utf-8"))
+
+
+def write_gate_artifacts(proj: Path, report: dict):
+    """把门禁 JSON 与零依赖 HTML 一并落盘，保证项目可断点复核。"""
+    gate = report["gate"]
+    gates = proj / "gates"
+    gates.mkdir(parents=True, exist_ok=True)
+    json_path = gates / f"gate{gate}.json"
+    html_path = gates / f"gate{gate}.html"
+    if html_path.exists():
+        (gates / f"gate{gate}_prev.html").write_bytes(html_path.read_bytes())
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    rows = []
+    items = list(report.get("checks", []))
+    for shot in report.get("shots", []):
+        for check in shot.get("checks", []):
+            items.append({**check, "object": check.get("shot_id") or shot.get("file", "")})
+    for check in items:
+        ok = bool(check.get("pass"))
+        rows.append(
+            "<tr><td>{}</td><td>{}</td><td class='{}'>{}</td><td>{}</td></tr>".format(
+                html.escape(str(check.get("object", "项目"))),
+                html.escape(str(check.get("item", ""))),
+                "ok" if ok else "no", "通过" if ok else "失败",
+                html.escape(str(check.get("evidence", ""))),
+            )
+        )
+    summary = report.get("summary", {})
+    passed = bool(summary.get("pass"))
+    template = (Path(__file__).parent.parent / "assets" / "gate_page_template.html").read_text(encoding="utf-8")
+    values = {
+        "GATE_TITLE": f"关 {gate} 机检报告",
+        "STATUS_CLASS": "pass" if passed else "fail",
+        "STATUS_TEXT": "PASS" if passed else "FAIL",
+        "PASSED": summary.get("passed", 0),
+        "TOTAL": summary.get("total", 0),
+        "PROJECT": proj.name,
+        "TIMESTAMP": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "ROWS": "\n".join(rows),
+        "FAILED_NOTES": "" if passed else "<p class='fix'>存在失败项，修复后必须重新运行本门禁。</p>",
+    }
+    for key, value in values.items():
+        template = template.replace("{{" + key + "}}", str(value))
+    html_path.write_text(template, encoding="utf-8")
+
+
+def persist_prompt_fingerprints(proj: Path, report: dict):
+    storyboard_path = proj / "state" / "storyboard.json"
+    if not storyboard_path.exists():
+        return
+    storyboard = load(storyboard_path)
+    fingerprints = {Path(item["file"]).stem: item["fingerprint"]
+                    for item in report.get("shots", [])}
+    for shot in storyboard.get("shots", []):
+        if shot.get("id") in fingerprints:
+            shot["prompt_fingerprint"] = fingerprints[shot["id"]]
+    storyboard_path.write_text(json.dumps(storyboard, ensure_ascii=False, indent=2) + "\n",
+                               encoding="utf-8")
 
 
 # ---------------- 关1 · 时间轴机检 ----------------
@@ -197,9 +261,9 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
     # 14 参考职责声明
     duties = meta.get("reference_duties", [])
     enum_ok = isinstance(duties, list) and bool(duties) and all(d in REF_DUTIES for d in duties)
-    likeness_ok = (not has_protagonist) or ("likeness" in duties)
-    add(14, "参考职责声明", enum_ok and likeness_ok,
-        f"duties={duties} enum_ok={enum_ok} likeness_ok={likeness_ok}")
+    identity_ok = (not has_protagonist) or ({"likeness", "wardrobe"} <= set(duties))
+    add(14, "参考职责声明", enum_ok and identity_ok,
+        f"duties={duties} enum_ok={enum_ok} identity_ok={identity_ok}")
 
     return checks
 
@@ -335,9 +399,9 @@ def main():
         report = {"gate": 1, "checks": checks}
         all_ok = all(c["pass"] for c in checks)
         n_pass, n_total = sum(1 for c in checks if c["pass"]), len(checks)
-        print(json.dumps({**report, "summary": {"pass": all_ok, "passed": n_pass,
-                                                "total": n_total}},
-                         ensure_ascii=False, indent=2))
+        report["summary"] = {"pass": all_ok, "passed": n_pass, "total": n_total}
+        write_gate_artifacts(proj, report)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
         sys.exit(0 if all_ok else 1)
 
     if sys.argv[1] == "gate5":
@@ -380,6 +444,9 @@ def main():
                   sum(1 for c in top_checks if c["pass"]))
         n_total = sum(len(s["checks"]) for s in report["shots"]) + len(top_checks)
     report["summary"] = {"pass": all_ok, "passed": n_pass, "total": n_total}
+    if sys.argv[1] == "gate5" and all_ok:
+        persist_prompt_fingerprints(proj, report)
+    write_gate_artifacts(proj, report)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     sys.exit(0 if all_ok else 1)
 

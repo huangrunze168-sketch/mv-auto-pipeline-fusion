@@ -109,7 +109,7 @@
     "lyric_text": "画不完的圆",
     "style_fingerprint": "sha256:...",
     "character_fingerprint": "sha256:...",
-    "reference_duties": ["likeness", "lighting"]   // 参考职责分离（机检#14）
+    "reference_duties": ["likeness", "wardrobe"]  // 人物图仅锁五官/发型/服装，不继承构图背景灯光
   },
   "style": "低饱和水墨质感，侧逆光，东方器物美学",
   "scene": "昏暗书房，烛火在铜灯里摇曳，窗纸透出月色",

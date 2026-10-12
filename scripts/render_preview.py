@@ -99,14 +99,23 @@ def main():
         print(f"[render] {s['id']} D={D} preset={i % len(PRESETS)}", flush=True)
         # BUG-10 修法：三个表达式都要做 {D} 替换（此前只替换了 z，x/y 的 {D} 原样进 ffmpeg）
         zt, xt, yt = (e.format(D=D) for e in (zt, xt, yt))
-        vf = (f"scale={a.width * 2}:{a.height * 2},"
-              f"zoompan=z='{zt}':x='{xt}':y='{yt}':"
-              f"d={D}:s={a.width}x{a.height}:fps={a.fps}")
+        # 参考图只锁人物，不得为适配画布而改变五官与服装比例。先做等比前景，
+        # 再用同图的模糊放大副本填满画布，最后才施加 Ken Burns 运镜。
+        canvas_w, canvas_h = a.width * 2, a.height * 2
+        reference_filter = (
+            f"[0:v]split=2[bg0][fg0];"
+            f"[bg0]scale={canvas_w}:{canvas_h}:force_original_aspect_ratio=increase,"
+            f"crop={canvas_w}:{canvas_h},boxblur=30:10[bg];"
+            f"[fg0]scale={canvas_w}:{canvas_h}:force_original_aspect_ratio=decrease[fg];"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2,"
+            f"zoompan=z='{zt}':x='{xt}':y='{yt}':"
+            f"d={D}:s={a.width}x{a.height}:fps={a.fps}[v]"
+        )
         raw = clips / f"{s['id']}_raw.mp4"
         fit = clips / f"{s['id']}.mp4"
         if img:
             render_cmd = ["ffmpeg", "-y", "-v", "error", "-loop", "1", "-i", str(img),
-                          "-vf", vf]
+                          "-filter_complex", reference_filter, "-map", "[v]"]
         else:
             # 无主角模式仍要能跑通预览链路，用中性底图代替不存在的 protagonist.*。
             render_cmd = ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",

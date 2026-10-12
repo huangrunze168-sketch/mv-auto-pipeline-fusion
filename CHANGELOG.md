@@ -1,5 +1,30 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## V1.3.1 · 2026-10-12 · 16:9 人物参考真实试产修复
+
+以 48.85 秒母带、12 行官方歌词和竖幅人物参考图真实生成 1280×720 预览，反推并修复：
+
+- 新增 `scripts/prompt_build.py`，补齐步骤 5 从 storyboard 到 14 镜六段式提示词的可执行断点。
+- 人物参考职责由单一 `likeness` 扩为 `likeness + wardrobe`，锁定五官、发型、耳饰、服装版型/纹样/层次，并明确禁止继承参考图构图、背景与灯光。
+- 修复竖图直接缩放到横屏导致人物五官和身形变形：预览改为等比前景 + 同图模糊填充。
+- `gate_checks.py` 自动落盘 `gates/gate*.json` 和零依赖 HTML；关 5 通过后回写逐镜提示词指纹。
+- Windows 命令行统一使用 UTF-8，测试子进程显式按 UTF-8 解码。
+- 真实样片关 1 为 6/6、关 5 为 197/197、关 6 为 8/8，对齐三验 PASS。
+
+## V1.3.0 · 2026-10-12 · ZY Cinematic Realism 提示词构造层
+
+### 新增
+
+- 内置上游 `ZY Cinematic Realism / 造梦师 v2.5.0`（提交 `9a3b36d1fb6a980ae9e21f74c86dd56bae443a4d`），以原名放置于 `vendor/zy-cinematic-realism/`。
+- 新增 `references/zy-cinematic-integration.md`，定义 Scene Master、Creative Grammar、连续性与结果修复到 MV 六段式字段的映射。
+- 新增第三方许可声明与回归测试，确保上游 `CC BY-NC 4.0`、作者署名、来源和 MV 权限边界持续存在。
+
+### 调整
+
+- 步骤 5 改为：冻结时间轴与口型硬事实 → 构造 Scene Master → 应用必要的 Creative Grammar → 映射六段式 → 14 项门禁。
+- 静帧模型适配器仅用于参考帧；视频提示词在获得真实后端契约前保持模型中立。
+- 将旧的同源改名副本 `vendor/cinematic-frame-craft/` 替换为可追溯的上游原名目录，并恢复缺失的 `LICENSE`、`NOTICE.md` 与文件级版权头。
+
 ## V1.2.0 · 2026-10-12 · mv-test-01 实跑复盘发版
 
 第一支真实产出（48.85s 歌曲 + 真主人公图），从成片反推出 8 项修复。铁律 F 首次闭环。
