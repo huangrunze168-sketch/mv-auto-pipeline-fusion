@@ -90,3 +90,4 @@ project/
 - `references/gates-spec.md` — 八道关逐项机检规格
 - `references/prompt-framework.md` — 六段式提示词框架与 14 项机检
 - `references/api-backends.md` — 全 API 依赖清单与成本模型
+- `vendor/cinematic-frame-craft/` — 画面提示词工程组件库（内置，步骤 5 派生时按需加载：其 SKILL.md 为场景理解→画面提示词的编译流程，`references/` 含导演卡库 / 镜头光线 / 连续性卡 / 参考图解析 / 结果修复卡）
