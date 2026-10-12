@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""拼接 CH*_fitted.mp4，规范到 16:9，并重新贴回母带。"""
+"""拼接音频驱动的 CH*_fitted.mp4，规范到 16:9，并贴回同源无损时间基准。"""
 import argparse
 import json
 import subprocess
@@ -37,6 +37,10 @@ def main():
     args = ap.parse_args()
     project = Path(args.project_dir).resolve()
     plan = json.loads((project / "state" / "chapter_plan.json").read_text(encoding="utf-8"))
+    missing_audio_drive = [chapter.get("id", "?") for chapter in plan.get("chapters", [])
+                           if chapter.get("audio_drive", {}).get("h3_param") != "audio_list"]
+    if missing_audio_drive:
+        raise ValueError("章节未经过 audio_list 音频驱动准备: " + ", ".join(missing_audio_drive))
     clips = [project / "clips" / f"{chapter['id']}_fitted.mp4"
              for chapter in plan.get("chapters", [])]
     missing = [str(path) for path in clips if not path.is_file()]

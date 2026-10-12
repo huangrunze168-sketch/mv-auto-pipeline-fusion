@@ -6,11 +6,11 @@ description: >
   触发词：做 MV、音乐视频、口型对齐、MV 流水线、给这首歌出画面。
 ---
 
-# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.3.3）
+# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.3.4）
 
 > 一句话需求：**给一首歌和一张图，出来一支完整的、口型对得上的音乐 MV。**
 > 技术基线：全 API（无需 GPU）· 运行形态：Agent Skill。
-> V1.3.3：ZY 故事镜按视频模型时长聚合为章节，支持 MiniMax H3 长视频生成、时长贴合、严格 16:9 归一化与母带重贴。详见 CHANGELOG.md。
+> V1.3.4：ZY 故事镜按视频模型时长聚合为章节；MiniMax H3 使用 `reference-to-video` 的 `image_list + audio_list` 输入，实现逐章音频驱动，再做时长贴合、严格 16:9 归一化与同源母带回贴。详见 CHANGELOG.md。
 
 ## 输入 / 输出
 
@@ -78,8 +78,9 @@ project/
 - **成本台账**（`scripts/ledger.py`）：币与真钱分列，调度动作全留痕；总览三数——成片多少秒、机器跑了多久、花了多少。
 - **电影化提示词构造**（`references/zy-cinematic-integration.md`）：使用 `vendor/zy-cinematic-realism/` 的 Scene Master、Creative Grammar、连续性与局部修复方法；只负责视觉构造，不得改写 timeline 窗口、歌词、口型、音频策略或后端契约。
 - **长视频章节**（`scripts/chapter_plan_build.py`）：模型最大时长是硬上限，ZY 故事断点优先；每章继续携带 Continuity Bible 与逐镜 Shot Deltas。
-- **章节成片**（`scripts/stitch_chapters.py`）：逐章时长贴合后拼接，后端非严格 16:9 输出统一到交付画布，再重新贴回母带。
-- **口型边界**：MiniMax H3 章节生成只承担叙事视频；未输入逐章人声驱动且未使用权威 ASR 时间轴时，不得把“音频对齐 PASS”误报为“逐字口型 PASS”。
+- **章节音频驱动**（`scripts/chapter_audio_build.py`）：从母带按章节窗口裁出 WAV，记录来源窗口与 SHA-256；MiniMax H3 必须走 `reference-to-video`，人物/场景放入 `image_list`，对应章节音频放入 `audio_list`。`start-frame-to-video` 明确排除 `audio_list`，不得误用。
+- **章节成片**（`scripts/stitch_chapters.py`）：只接受带 `audio_drive.h3_param=audio_list` 证据的章节；逐章时长贴合后拼接，后端非严格 16:9 输出统一到交付画布，再贴回与驱动片段同源的母带。
+- **口型边界**：H3 已接收逐章原始人声音频时可称“音频驱动口型”；没有权威 ASR/音素级验收时，仍不得进一步声称“逐字口型 PASS”。
 - **后端门限**：视频生成后端（普通镜头 / 口型镜头）一律由用户提供，skill 只提问（后端名称、凭证、并发、真钱封顶），**不内置任何后端适配代码与默认值**；未提供后端时交付物止于关 1–6 + 静帧预览成片。
 - **凭证四级读取**：会话级 → 项目级 → 用户级 → 环境变量，用户级跨项目永久生效，永远不再问用户要 key。
 

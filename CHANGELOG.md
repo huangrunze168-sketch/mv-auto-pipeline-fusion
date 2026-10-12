@@ -1,5 +1,12 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## V1.3.4 · 2026-10-12 · 修复 MiniMax H3 音频驱动模式
+
+- 修正能力判断：MiniMax H3 支持 `audio_list`，但该参数属于 `reference-to-video`；`start-frame-to-video` 模式会排除音频输入。
+- 新增 `chapter_audio_build.py`，严格按章节窗口裁切母带并记录 SHA-256，避免“生成时没传音频、合成时才覆盖音轨”的假口型通过。
+- 章节计划明确写入 `generation_mode=reference-to-video` 与 `audio_input=audio_list`；合成前强制检查音频驱动证据。
+- 验收措辞分层：已传人声可称“音频驱动口型”，只有通过权威 ASR/音素级验收后才能称“逐字口型 PASS”。
+
 ## V1.3.3 · 2026-10-12 · MiniMax H3 长章节自动成片
 
 - 用 ZY Story Visual Development 的故事断点把 14 镜聚合为 4 个不超过 15 秒的章节；模型时长上限不再替代叙事边界。

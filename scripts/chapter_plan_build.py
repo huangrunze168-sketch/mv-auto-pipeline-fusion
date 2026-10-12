@@ -85,6 +85,8 @@ def main():
             "delivery": {
                 "aspect_ratio": "16:9",
                 "model": args.model,
+                "generation_mode": "reference-to-video",
+                "audio_input": "audio_list",
                 "motion_rule": "人物、衣料、道具、环境与摄影机分别产生因果明确的真实运动；禁止静态图缩放或平移冒充视频",
             },
         }

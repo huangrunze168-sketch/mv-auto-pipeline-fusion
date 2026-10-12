@@ -22,13 +22,16 @@ python scripts/prompt_build.py <project_dir>
 # 3.1 长视频模型：按 15 秒上限与故事断点聚合章节
 python scripts/chapter_plan_build.py <project_dir> --max-duration 15 --model "MiniMax H3"
 
+# 3.2 从母带按章节窗口切出音频；H3 必须使用 reference-to-video 的 audio_list
+python scripts/chapter_audio_build.py <project_dir>
+
 # 4. 硬门禁机检（关1/关5/关6，同时写 gates/*.json + gates/*.html）
 python scripts/gate_checks.py gate5 <project_dir>
 
 # 5. 多场景关键帧预览成片（优先 input/scene_*.png；无场景图才回退人物参考图）
 python scripts/render_preview.py <project_dir>
 
-# MiniMax H3 章节完成并经 duration_fit.py 输出 clips/CH*_fitted.mp4 后：
+# MiniMax H3 以 image_list + audio_list 生成章节，并经 duration_fit.py 输出 clips/CH*_fitted.mp4 后：
 python scripts/stitch_chapters.py <project_dir> --width 1280 --height 720
 
 # 6. 对齐三验（建议同时传入从成片提取的候选音轨，避免把母带与自身比较）
@@ -48,7 +51,8 @@ python -m unittest discover -s tests -v
 | storyboard_build.py | 时间分镜推导并按白名单合并 ZY 故事方案 |
 | prompt_build.py | 从 ZY Scene Master / Continuity Bible 编译提示词；缺少故事方案时阻断 |
 | chapter_plan_build.py | 按视频模型最长时长聚合连续镜头，保留 Continuity Bible 与 Shot Deltas |
-| stitch_chapters.py | 拼接长视频章节、修正严格 16:9 画布并重新贴回母带 |
+| chapter_audio_build.py | 按章节窗口裁出原始人声音频，生成 H3 `audio_list` 驱动清单与 SHA-256 审计记录 |
+| stitch_chapters.py | 只接受已标记 `audio_list` 驱动的章节，拼接、修正严格 16:9 并贴回同源母带 |
 | duration_fit.py | 时长贴合（帧网格+流复制快路径） |
 | align_verify.py | 对齐三验（纯标准库） |
 | render_preview.py | 多场景关键帧预览（章节分配+等比画面+Ken Burns+母带重贴） |

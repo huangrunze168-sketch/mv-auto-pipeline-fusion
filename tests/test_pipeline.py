@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.gate_checks import REF_DUTIES, check_storyboard
 from scripts.chapter_plan_build import group_shots
+from scripts.chapter_audio_build import build_audio_segments
 from scripts.render_preview import resolve_visual_asset
 
 
@@ -93,6 +94,30 @@ class PipelineTests(unittest.TestCase):
         groups = group_shots(shots, 15.0, {"SH002"})
         self.assertEqual([[s["id"] for s in group] for group in groups],
                          [["SH001", "SH002"], ["SH003"]])
+
+    def test_chapter_audio_build_records_h3_audio_list_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "input").mkdir()
+            (project / "state").mkdir()
+            write_wav(project / "input" / "song.wav", 1.0)
+            (project / "state" / "timeline.json").write_text(json.dumps({
+                "source_audio": "input/song.wav", "duration_sec": 1.0,
+            }), encoding="utf-8")
+            (project / "state" / "chapter_plan.json").write_text(json.dumps({
+                "chapters": [{
+                    "id": "CH01", "window": {"start": 0.0, "end": 1.0},
+                    "duration_sec": 1.0, "shot_deltas": [{"lip_sync": True}],
+                }],
+            }), encoding="utf-8")
+            build_audio_segments(project, sample_rate=16000)
+            updated = json.loads((project / "state" / "chapter_plan.json")
+                                 .read_text(encoding="utf-8"))
+            drive = updated["chapters"][0]["audio_drive"]
+            self.assertEqual("reference-to-video", drive["h3_mode"])
+            self.assertEqual("audio_list", drive["h3_param"])
+            self.assertTrue(drive["required"])
+            self.assertTrue((project / drive["local_path"]).is_file())
 
     def test_fallback_keeps_many_lyrics_inside_short_silent_audio(self):
         with tempfile.TemporaryDirectory() as tmp:
