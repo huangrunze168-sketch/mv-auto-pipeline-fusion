@@ -84,11 +84,13 @@ def main():
         report.append({"shot_id": s["id"], "target": round(dur, 3), **info})
 
     # concat
+    # BUG-16 修法：ffmpeg 的 concat demuxer 按「列表文件所在目录」解析相对条目，
+    # 而条目此前按 cwd 相对书写，视 cwd 偶合而偶发通过；条目与列表一律绝对路径。
     lst = clips / "concat.txt"
-    lst.write_text("".join(f"file '{(clips / (s['id'] + '.mp4')).as_posix()}'\n"
+    lst.write_text("".join(f"file '{(clips / (s['id'] + '.mp4')).resolve()}'\n"
                            for s in sb["shots"]), encoding="utf-8")
     silent = out_dir / "mv_preview_silent.mp4"
-    run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
+    run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst.resolve()),
          "-c", "copy", str(silent)])
     # 母带重贴
     final = out_dir / "mv_preview.mp4"
