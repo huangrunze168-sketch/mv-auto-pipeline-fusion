@@ -28,7 +28,23 @@
    - 制作参考帧：可按 `vendor/zy-cinematic-realism/references/model-routing.md` 选择静帧适配器。
    - 生成视频：默认输出模型中立的物理描述；只有拿到真实视频后端字段表后才转成后端原生格式。
 6. **降级映射到六段式**：按下表写入 `style → scene → subject → performance → camera`，最后由 MV 层独立写 `audio_policy` 与歌词。
-7. **清理与门禁**：应用 anti-AI cleanup，去掉无因果的雾、轮廓光、广告摆拍和空泛质量词，然后运行 `gate_checks.py gate5`；14 项未全绿不得提交生成。
+7. **清理与门禁**：应用 anti-AI cleanup，去掉无因果的雾、轮廓光、广告摆拍和空泛质量词，然后运行 `gate_checks.py gate5`；16 项未全绿不得提交生成。
+
+### `state/story_plan.json` 最小契约
+
+`storyboard_build.py` 第一次运行只确定时间窗、歌词行、口型、景别和后端。Agent 必须按上游
+Story Visual Development 编写 `state/story_plan.json`，再运行一次 `storyboard_build.py` 合并。
+文件必须声明 `method: "zy_story_visual_development"`，包含 `continuity_bible`，且 `shots`
+必须与时间分镜镜头 ID 完整一致。每镜至少包含：
+
+- `id`、`lyric_line`
+- `story_beat`、`narrative_before`、`current_action`、`implied_next`
+- `space`、`blocking`、`props`、`light`、`camera_witness`
+- `shot_delta`
+
+故事层只能补充这些字段，不得覆盖 `window / lyric_line / lip_sync / shot_type / backend`。
+缺少故事方案时 storyboard 会标记 `story_mode: timing_only`，`prompt_build.py` 必须阻断，
+不能悄悄退化成“歌词 + 通用动作”的模板提示词。
 
 ## 三、Scene Master 到六段式字段映射
 

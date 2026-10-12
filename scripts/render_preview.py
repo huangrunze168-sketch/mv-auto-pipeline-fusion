@@ -3,7 +3,8 @@
 """
 render_preview.py — 静帧预览成片（无视频生成 API 时的全链产出）
 
-每镜：主人公图 Ken Burns 运镜（zoompan 按窗口帧数渲染，画面轨无音轨）
+每镜：优先按时间章节选择 input/scene_*.png，多场景分别做 Ken Burns 运镜；
+  没有场景关键帧时才回退主人公图（zoompan 按窗口帧数渲染，画面轨无音轨）
   → duration_fit 贴合窗口长 → concat 拼接 → 原曲母带重贴音轨。
 窗口已帧吸附（storyboard_build），故贴合步为恒等操作，合计严格=全曲长。
 
@@ -12,6 +13,7 @@ render_preview.py — 静帧预览成片（无视频生成 API 时的全链产�
 
 用法:
   python render_preview.py <project_dir> [--fps 24] [--width 720] [--height 1280]
+      [--output-name mv_preview.mp4]
 产出: output/mv_preview.mp4 + output/verification_report.json
 """
 import argparse
@@ -55,12 +57,29 @@ def resolve_audio(proj: Path, timeline: dict) -> Path:
     raise ValueError("input/ 中存在多个母带，请在 timeline.source_audio 中明确指定")
 
 
+def resolve_visual_asset(proj: Path, shot: dict, index: int, total: int,
+                         scene_assets: list, fallback: Path):
+    """显式逐镜资产优先；否则把 scene_* 按时间章节均匀分配给分镜。"""
+    declared = shot.get("visual_asset")
+    if declared:
+        candidate = Path(declared)
+        candidate = candidate if candidate.is_absolute() else proj / candidate
+        if not candidate.is_file():
+            raise FileNotFoundError(f"{shot.get('id')} visual_asset 不存在: {candidate}")
+        return candidate
+    if scene_assets:
+        phase = min(len(scene_assets) - 1, index * len(scene_assets) // max(1, total))
+        return scene_assets[phase]
+    return fallback
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project_dir")
     ap.add_argument("--fps", type=float, default=24)
     ap.add_argument("--width", type=int, default=720)
     ap.add_argument("--height", type=int, default=1280)
+    ap.add_argument("--output-name", default="mv_preview.mp4")
     a = ap.parse_args()
     proj = Path(a.project_dir)
     sb = json.loads((proj / "state" / "storyboard.json").read_text(encoding="utf-8"))
@@ -70,6 +89,8 @@ def main():
         raise ValueError("storyboard.shots 不能为空")
     if a.fps <= 0 or a.width <= 0 or a.height <= 0:
         raise ValueError("--fps/--width/--height 必须大于 0")
+    if Path(a.output_name).name != a.output_name or Path(a.output_name).suffix.lower() != ".mp4":
+        raise ValueError("--output-name 必须是当前 output/ 下的 .mp4 文件名")
     # BUG-15 修法：全曲通常不是整数帧（48.848958s×24=1172.375），末镜按 ceil 会多出
     # 0.375 帧。改为末镜吸收残差：D_last = ⌊全曲×fps⌋ − Σ(前面各镜 D)，总帧数=⌊全曲×fps⌋
     song_dur = shots[-1]["window"]["end"]
@@ -84,6 +105,7 @@ def main():
                     if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
     protagonist = sorted(p for p in images if p.stem.lower() == "protagonist")
     img = protagonist[0] if protagonist else (images[0] if images else None)
+    scene_assets = sorted(p for p in images if p.stem.lower().startswith("scene_"))
     audio = resolve_audio(proj, timeline)
     clips = proj / "clips"
     out_dir = proj / "output"
@@ -96,7 +118,9 @@ def main():
         dur = w["end"] - w["start"]
         D = Ds[i]
         zt, xt, yt = PRESETS[i % len(PRESETS)]
-        print(f"[render] {s['id']} D={D} preset={i % len(PRESETS)}", flush=True)
+        shot_img = resolve_visual_asset(proj, s, i, len(shots), scene_assets, img)
+        print(f"[render] {s['id']} D={D} preset={i % len(PRESETS)} "
+              f"asset={shot_img.name if shot_img else 'color'}", flush=True)
         # BUG-10 修法：三个表达式都要做 {D} 替换（此前只替换了 z，x/y 的 {D} 原样进 ffmpeg）
         zt, xt, yt = (e.format(D=D) for e in (zt, xt, yt))
         # 参考图只锁人物，不得为适配画布而改变五官与服装比例。先做等比前景，
@@ -113,8 +137,8 @@ def main():
         )
         raw = clips / f"{s['id']}_raw.mp4"
         fit = clips / f"{s['id']}.mp4"
-        if img:
-            render_cmd = ["ffmpeg", "-y", "-v", "error", "-loop", "1", "-i", str(img),
+        if shot_img:
+            render_cmd = ["ffmpeg", "-y", "-v", "error", "-loop", "1", "-i", str(shot_img),
                           "-filter_complex", reference_filter, "-map", "[v]"]
         else:
             # 无主角模式仍要能跑通预览链路，用中性底图代替不存在的 protagonist.*。
@@ -137,11 +161,12 @@ def main():
     lst = clips / "concat.txt"
     lst.write_text("".join(f"file '{(clips / (s['id'] + '.mp4')).resolve()}'\n"
                            for s in shots), encoding="utf-8")
-    silent = out_dir / "mv_preview_silent.mp4"
+    output_stem = Path(a.output_name).stem
+    silent = out_dir / f".{output_stem}_silent.mp4"
     run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst.resolve()),
          "-c", "copy", str(silent)])
     # 母带重贴
-    final = out_dir / "mv_preview.mp4"
+    final = out_dir / a.output_name
     run(["ffmpeg", "-y", "-v", "error", "-i", str(silent), "-i", str(audio),
          "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
          str(final)])
@@ -149,7 +174,8 @@ def main():
     # 生成真实候选音轨与母带的对齐报告，而不是把母带和自己比较。
     reference_wav = out_dir / ".verify_reference.wav"
     candidate_wav = out_dir / ".verify_candidate.wav"
-    report_path = out_dir / "verification_report.json"
+    report_path = (out_dir / "verification_report.json" if a.output_name == "mv_preview.mp4"
+                   else out_dir / f"verification_report_{output_stem}.json")
     try:
         run(["ffmpeg", "-y", "-v", "error", "-i", str(audio), "-ac", "1", "-ar", "16000",
              "-c:a", "pcm_s16le", str(reference_wav)])

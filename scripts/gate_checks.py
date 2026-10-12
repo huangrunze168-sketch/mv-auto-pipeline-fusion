@@ -5,7 +5,7 @@ gate_checks.py — 关5/关6 硬门禁机检器（纯标准库）
 
 用法:
   python gate_checks.py gate1 <project_dir>            # 校验 timeline.json（关1）
-  python gate_checks.py gate5 <project_dir>            # 校验 prompts/*.json，14 项机检（11 基础 + 3 扩展项）
+  python gate_checks.py gate5 <project_dir>            # 校验 prompts/*.json，16 项机检
   python gate_checks.py gate6 <project_dir>            # 校验 storyboard.json 窗口与口型
 
 退出码: 0 = 全绿放行; 1 = 存在失败项（硬门禁阻断）
@@ -265,6 +265,14 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
     add(14, "参考职责声明", enum_ok and identity_ok,
         f"duties={duties} enum_ok={enum_ok} identity_ok={identity_ok}")
 
+    # 15-16：必须来自 ZY Story Visual Development，而非歌词模板拼接。
+    story = pr.get("story", {})
+    story_fields = ("beat", "before", "next", "shot_delta")
+    add(15, "ZY故事结构完整", all(str(story.get(k, "")).strip() for k in story_fields),
+        f"fields={[k for k in story_fields if story.get(k)]}")
+    add(16, "故事方案指纹已锁定", bool(meta.get("story_plan_fingerprint")),
+        meta.get("story_plan_fingerprint"))
+
     return checks
 
 
@@ -344,6 +352,14 @@ def check_storyboard(sb: dict, timeline: dict) -> list:
                    for s in shots):
             missing.append(ln["index"])
     add("歌词行全覆盖(几何)", not missing, str(missing))
+
+    # ⑨ 故事分镜必须由 ZY Story Visual Development 产出，且每镜具备因果链与 Delta。
+    required_story = ("story_beat", "narrative_before", "current_action",
+                      "implied_next", "shot_delta", "camera_witness")
+    bad_story = [s.get("id") for s in shots
+                 if any(not str(s.get(k, "")).strip() for k in required_story)]
+    add("ZY故事分镜完整", sb.get("story_mode") == "zy_story_visual_development" and not bad_story,
+        f"mode={sb.get('story_mode')} bad={bad_story[:5]}")
 
     return checks
 

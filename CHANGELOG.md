@@ -1,5 +1,14 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## V1.3.2 · 2026-10-12 · 多场景 MV 预演
+
+- 修复只声明接入 ZY Cinematic Realism、实际仍按歌词套通用动作模板的问题：新增 `story_plan.json` 契约，覆盖来源台账、叙事弧、Continuity Bible、逐镜 Scene Master 与 Shot Delta。
+- `storyboard_build.py` 缺少故事方案时明确标记 `timing_only`；`prompt_build.py` 阻断模板化降级；Gate 5/6 增加故事结构与指纹检查。
+- 真实复盘确认“单张人物图全片 Ken Burns”只能算技术预览，不能称为 MV 视觉产出。
+- `render_preview.py` 优先读取 `input/scene_*.png`，按歌曲时间章节分配到不同分镜；支持逐镜 `visual_asset` 覆盖与自定义输出文件名。
+- 人物参考图仅用于生成场景关键帧时锁定 `likeness + wardrobe`，不再直接充当所有镜头。
+- 新增多场景章节分配回归测试。
+
 ## V1.3.1 · 2026-10-12 · 16:9 人物参考真实试产修复
 
 以 48.85 秒母带、12 行官方歌词和竖幅人物参考图真实生成 1280×720 预览，反推并修复：

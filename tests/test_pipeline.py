@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import random
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(ROOT))
 
 from scripts.gate_checks import REF_DUTIES, check_storyboard
+from scripts.render_preview import resolve_visual_asset
 
 
 def write_wav(path: Path, duration: float, silence: bool = False) -> None:
@@ -38,11 +40,14 @@ def write_wav(path: Path, duration: float, silence: bool = False) -> None:
 
 class PipelineTests(unittest.TestCase):
     def run_script(self, name: str, *args: object) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         return subprocess.run(
             [sys.executable, str(SCRIPTS / name), *(str(arg) for arg in args)],
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env=env,
         )
 
     def test_zy_cinematic_vendor_keeps_license_and_mv_boundary(self):
@@ -59,6 +64,14 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("wardrobe", REF_DUTIES)
         framework = (ROOT / "references" / "prompt-framework.md").read_text(encoding="utf-8")
         self.assertIn("likeness + wardrobe", framework)
+
+    def test_preview_distributes_scene_assets_by_chapter(self):
+        scenes = [Path(f"scene_{i}.png") for i in range(4)]
+        selected = [resolve_visual_asset(Path("."), {}, i, 8, scenes, None).name
+                    for i in range(8)]
+        self.assertEqual(selected, ["scene_0.png", "scene_0.png", "scene_1.png",
+                                    "scene_1.png", "scene_2.png", "scene_2.png",
+                                    "scene_3.png", "scene_3.png"])
 
     def test_fallback_keeps_many_lyrics_inside_short_silent_audio(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -154,6 +167,22 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             report = json.loads(result.stdout)
             self.assertFalse(report["checks"][0]["pass"])
+
+    def test_prompt_build_rejects_timing_only_storyboard(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            (project / "state").mkdir()
+            (project / "input").mkdir()
+            (project / "state" / "timeline.json").write_text(
+                json.dumps({"duration_sec": 1.0, "lines": []}), encoding="utf-8")
+            (project / "state" / "style.json").write_text(
+                json.dumps({"fingerprint": "sha256:style"}), encoding="utf-8")
+            (project / "state" / "storyboard.json").write_text(
+                json.dumps({"story_mode": "timing_only", "shots": []}), encoding="utf-8")
+
+            result = self.run_script("prompt_build.py", project)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ZY Cinematic Realism", result.stderr)
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "需要 ffmpeg")
     def test_duration_fit_copy_path_removes_audio(self):

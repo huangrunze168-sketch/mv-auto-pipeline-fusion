@@ -11,10 +11,11 @@ storyboard_build.py — 步骤4工具：从 timeline 推导分镜（窗口/口�
 
 用法:
   python storyboard_build.py <project_dir> [--fps 24]
-产出: state/storyboard.json（prompts 骨架由步骤5的 Agent 派生，本脚本不生成）
+产出: state/storyboard.json（若存在 state/story_plan.json，则合并 ZY 故事分镜）
 """
 import argparse
 import json
+import hashlib
 from pathlib import Path
 
 FPS_DEFAULT = 24
@@ -28,6 +29,54 @@ CONCEPTS_NONLIP = ["环境空镜承接段落呼吸，不入人声口型",
                    "场景细节特写：母版道具承载叙事",
                    "远景交代人物与空间关系",
                    "背影跟拍，选择性可见"]
+
+REQUIRED_STORY_FIELDS = {
+    "story_beat", "narrative_before", "current_action", "implied_next",
+    "space", "blocking", "props", "light", "camera_witness", "shot_delta",
+}
+
+
+def sha256_file(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def apply_story_plan(proj: Path, shots: list) -> tuple[str, dict, str | None]:
+    """合并 Agent 按 ZY Story Visual Development 编写的故事方案。
+
+    时间窗、歌词、口型、景别和后端仍由 MV 层掌管；故事方案只能补充叙事与
+    Scene Master，不能覆盖这些硬事实。
+    """
+    path = proj / "state" / "story_plan.json"
+    if not path.exists():
+        for shot in shots:
+            shot["story_status"] = "missing"
+            shot["status"] = "pending_story"
+        return "timing_only", {}, None
+
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    if plan.get("method") != "zy_story_visual_development":
+        raise ValueError("story_plan.method 必须为 zy_story_visual_development")
+    plan_shots = {item.get("id"): item for item in plan.get("shots", [])}
+    if set(plan_shots) != {shot["id"] for shot in shots}:
+        raise ValueError("story_plan.shots 必须与 storyboard 镜头 ID 完整一致")
+
+    for shot in shots:
+        item = plan_shots[shot["id"]]
+        missing = sorted(REQUIRED_STORY_FIELDS - set(item))
+        if missing:
+            raise ValueError(f"{shot['id']} 故事字段缺失: {','.join(missing)}")
+        if item.get("lyric_line") != shot.get("lyric_line"):
+            raise ValueError(f"{shot['id']} lyric_line 与时间轴不一致")
+        # 明确白名单，避免故事层改写 MV 硬事实。
+        for key in REQUIRED_STORY_FIELDS | {"purpose", "knowledge_state", "prop_state"}:
+            if key in item:
+                shot[key] = item[key]
+        shot["visual_concept"] = item["story_beat"]
+        shot["story_status"] = "ready"
+        shot["status"] = "pending"
+
+    continuity = plan.get("continuity_bible", {})
+    return "zy_story_visual_development", continuity, sha256_file(path)
 
 
 def snap(t: float, fps: float) -> float:
@@ -153,9 +202,13 @@ def main():
             "repair": {"mode": "none", "problems": []},
             "status": "pending",
         })
+    story_mode, continuity, story_fp = apply_story_plan(proj, shots)
     sb = {"shots": shots, "lip_ratio_target": LIP_TARGET,
           "consecutive_lip_limit": 3, "fps": fps,
-          "frame_snapped": True}
+          "frame_snapped": True,
+          "story_mode": story_mode,
+          "story_plan_fingerprint": story_fp,
+          "continuity_bible": continuity}
     (proj / "state").mkdir(parents=True, exist_ok=True)
     (proj / "state" / "storyboard.json").write_text(
         json.dumps(sb, ensure_ascii=False, indent=2), encoding="utf-8")

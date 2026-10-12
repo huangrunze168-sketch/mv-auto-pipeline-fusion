@@ -6,11 +6,11 @@ description: >
   触发词：做 MV、音乐视频、口型对齐、MV 流水线、给这首歌出画面。
 ---
 
-# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.3.1）
+# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.3.2）
 
 > 一句话需求：**给一首歌和一张图，出来一支完整的、口型对得上的音乐 MV。**
 > 技术基线：全 API（无需 GPU）· 运行形态：Agent Skill。
-> V1.3.1：真实 16:9 试产补齐提示词派生、门禁落盘和人物五官/服装参考职责锁；预览保持参考图原始比例。详见 CHANGELOG.md。
+> V1.3.2：多场景关键帧按歌曲章节进入预览剪辑；人物参考图不再直接充当所有镜头。详见 CHANGELOG.md。
 
 ## 输入 / 输出
 
@@ -46,8 +46,8 @@ project/
 | 1 | 歌词提取与强制对齐：ASR API 只给时间，文本用官方歌词校正 → timeline.json（权威时间基准诞生地） | 关 1 | |
 | 2 | 风格锁定：必须先于资产，服装色调都依赖风格 → style.json | 关 2 | |
 | 3 | 人物与资产：主人公图指纹化、母带全片只上传一次；无主角模式跳过 | 关 3 | |
-| 4 | 分镜设计：按歌曲线切段，切点只落在歌词行尾 / 间奏边界；逐段定口型策略与景别 → storyboard.json | 关 4 | |
-| 5 | 提示词派生：先用 ZY Cinematic Realism 完成 Scene Master → Creative Grammar，再降级映射为 MV 六段式结构 + 唱歌专用框架，**14 项机检全绿才放行**（11 基础 + 3 扩展项） | 关 5 | ⛔ 硬 |
+| 4 | 时间分镜：按歌曲线切段并确定口型与景别；随后调用 ZY Cinematic Realism 的 Story Visual Development 编写 `story_plan.json`，再次合并为故事分镜 | 关 4 | |
+| 5 | 提示词派生：从 ZY Story Source Ledger + Continuity Bible + Scene Master + Shot Delta 编译为 MV 六段式；缺少故事方案时禁止模板化降级，**16 项机检全绿才放行** | 关 5 | ⛔ 硬 |
 | 6 | 音乐窗口与口型核对：窗口首尾相接、合计=全曲长、口型与景别一致，**任何环节不许手写秒数** | 关 6 | ⛔ 硬 |
 | 7 | 工作流体检 + 首镜试产：先拉真实节点表再提交；首镜实测契约 / 分辨率 / 音频策略。**前置门限：视频生成后端必须由用户提供（名称 / 凭证 / 并发 / 真钱封顶），skill 只提问不内置；未提供则流程止步于关 6 + 静帧预览成片** | | |
 | 8 | 批量生成：多路并发、断点续跑、在途任务救回；每 10–15 分钟主动汇报 | | |
@@ -70,9 +70,9 @@ project/
 ## 关键机制
 
 - **降级对齐**（`scripts/timeline_fallback.py`）：无 ASR key 时按能量起点 + 均匀分布生成试跑时间轴，全行 pending_review 待用户点头；**不可用于口型正式成片**。
-- **分镜推导**（`scripts/storyboard_build.py`）：窗口帧吸附（边界数组法）+ 口型节奏规则 + 景别轮转，产出即过关 6。
-- **提示词派生**（`scripts/prompt_build.py`）：从已锁定时间轴、风格、分镜和人物指纹生成六段式提示词；人物图固定五官/服装但不接管场景。
-- **静帧预览成片**（`scripts/render_preview.py`）：无视频 API 时主人公图等比前景 + 模糊填充 + Ken Burns + 母带重贴，验证全链对齐；口型需走 API 通路。
+- **分镜推导**（`scripts/storyboard_build.py`）：窗口帧吸附 + 口型节奏 + 景别轮转；存在 `state/story_plan.json` 时只按白名单合并 ZY 故事字段，禁止故事层覆盖时间、歌词、口型、景别和后端。
+- **故事编译**（`scripts/prompt_build.py`）：强制要求 `story_mode=zy_story_visual_development`，从因果链、连续性与 Shot Delta 构造提示词，不再使用歌词动作模板。
+- **多场景预览成片**（`scripts/render_preview.py`）：优先把 `input/scene_*.png` 按歌曲章节分配给各镜；只有没有场景关键帧时才回退人物图。静帧仍只验证剪辑结构，口型与真实运动需走视频 API。
 - **时长贴合**（`scripts/duration_fit.py`）：帧网格对齐（护栏 1e-4），帧数已合时流复制跳过重编码；计量用 nb_frames/fps，不信容器时长。
 - **对齐三验**（`scripts/align_verify.py`）：包络 + 局部搜索，纯标准库：① 各段时长合计 = 原曲长 ② 逐段波形最优滞后 ≈ 0 且相关度达标 ③ 对口型段人声能量非空。
 - **成本台账**（`scripts/ledger.py`）：币与真钱分列，调度动作全留痕；总览三数——成片多少秒、机器跑了多久、花了多少。
