@@ -23,23 +23,27 @@ REQUIRED_STORY_FIELDS = (
 def compile_director_method(style: dict, shot: dict) -> dict:
     """将上游导演路由展开成可执行决策，禁止只把导演姓名发给模型。"""
     ref = style.get("director_ref", {})
-    name = ref.get("name", "")
     intensity = ref.get("intensity", "明确")
+    routed_axes = ref.get("axes", {})
     method = {
         "strength": intensity,
-        "light_contrast": f"沿用实际光源：{shot['light']}；保留建筑遮挡形成的暗部，不为脸补装饰性轮廓光",
-        "color_exposure": "颜色必须附着在真实物体和光源上；皮肤服从环境曝光，不单独美容提亮",
-        "lens_camera": f"{shot['camera_witness']}；每镜最多一个主要摄影机动作，运动由人物位移、视线或道具状态改变触发",
-        "composition_space": f"视觉中心是{shot['visual_center']}；信息顺序为{shot['information_hierarchy']}；人物调度：{shot['blocking']}",
+        "light_contrast": routed_axes.get(
+            "light_contrast",
+            f"沿用实际光源：{shot['light']}；保留建筑遮挡形成的暗部，不为脸补装饰性轮廓光"),
+        "color_exposure": routed_axes.get(
+            "color_exposure",
+            "颜色必须附着在真实物体和光源上；皮肤服从环境曝光，不单独美容提亮"),
+        "lens_camera": routed_axes.get(
+            "lens_camera",
+            f"{shot['camera_witness']}；每镜最多一个主要摄影机动作，运动由人物位移、视线或道具状态改变触发"),
+        "composition_space": routed_axes.get(
+            "composition_space",
+            f"视觉中心是{shot['visual_center']}；信息顺序为{shot['information_hierarchy']}；人物调度：{shot['blocking']}"),
+        "active_traits": [str(item).strip() for item in ref.get("active_traits", [])
+                          if str(item).strip()],
     }
-    if name == "张艺谋":
-        # 轻微强度只启用两个兼容特征：物体承载颜色、稳定轴线中的一次偏离。
-        method["active_traits"] = [
-            "主导色必须来自红袖、旗帜、土墙或火光等真实物体，禁止全局红色滤镜",
-            "在稳定空间轴和重复秩序中，只让当前人物动作形成一次明确偏离；禁止为图案而堆群众",
-        ]
-    else:
-        method["active_traits"] = ["导演标签不进入最终提示词；仅保留上述可执行四轴"]
+    if not method["active_traits"]:
+        method["active_traits"] = ["不使用导演姓名或片名代替可执行的画面决策"]
     return method
 
 
@@ -110,7 +114,7 @@ def main():
                 "duration_sec": round(float(window["end"]) - float(window["start"]), 10),
                 "shot_type": shot["shot_type"],
                 "lip_sync": lip,
-                "backend": shot["backend"],
+                "generation_role": shot["generation_role"],
                 "lyric_line": shot.get("lyric_line"),
                 "lyric_text": lyric,
                 "style_fingerprint": style.get("fingerprint"),

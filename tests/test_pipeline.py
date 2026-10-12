@@ -19,7 +19,7 @@ from scripts.gate_checks import REF_DUTIES, check_storyboard
 from scripts.chapter_plan_build import group_shots, select_prototype
 from scripts.chapter_audio_build import build_audio_segments
 from scripts.director_review_gate import DIMENSIONS, initial_review, validate_review
-from scripts.h3_prompt_build import compile_chapter
+from scripts.chapter_prompt_build import build as build_chapter_prompts, compile_chapter
 from scripts.prompt_build import compile_director_method
 from scripts.render_preview import resolve_visual_asset
 
@@ -111,7 +111,10 @@ class PipelineTests(unittest.TestCase):
 
     def test_director_name_is_expanded_to_executable_axes(self):
         method = compile_director_method(
-            {"director_ref": {"name": "张艺谋", "intensity": "轻微"}},
+            {"director_ref": {
+                "name": "用户选择的导演参考", "intensity": "轻微",
+                "active_traits": ["主导色来自真实物体，不使用全局滤镜"],
+            }},
             {"light": "门外冷天光与室内余火", "camera_witness": "门柱后腰高机位",
              "visual_center": "鼓槌停在鼓面上方的手",
              "information_hierarchy": "先读手与鼓，再读侧脸，最后读空城门",
@@ -120,7 +123,7 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(all(method[key] for key in
                             ("light_contrast", "color_exposure", "lens_camera",
                              "composition_space")))
-        self.assertNotIn("张艺谋", json.dumps(method, ensure_ascii=False))
+        self.assertNotIn("用户选择的导演参考", json.dumps(method, ensure_ascii=False))
         self.assertIn("真实物体", method["active_traits"][0])
 
     def test_director_review_blocks_contact_sheet_only(self):
@@ -128,14 +131,86 @@ class PipelineTests(unittest.TestCase):
         review = initial_review(plan)
         review["reviewed_media"] = "output/contact_sheet.jpg"
         review["watched_full_duration"] = True
+        review["technical_checks"]["container_and_duration"] = "pass"
+        review["technical_checks"]["audio_alignment"] = "pass"
         review["decision"] = "approve"
         review["batch_generation_allowed"] = True
+        review["timecoded_findings"] = [{
+            "start_sec": 0.0, "end_sec": 1.0,
+            "dimension": "story_readability", "observation": "状态变化可读",
+        }]
         for name in DIMENSIONS:
             review["director_checks"][name] = {"status": "pass", "evidence": "有证据"}
         errors = validate_review(review, plan)
         self.assertTrue(any("动态视频" in error for error in errors))
 
-    def test_h3_compiler_rejects_story_summary_without_director_axes(self):
+    def test_director_review_requires_technical_and_timecoded_evidence(self):
+        plan = {"production_policy": {"prototype_chapter": "CH01"}}
+        review = initial_review(plan)
+        review["reviewed_media"] = "output/prototype.mp4"
+        review["watched_full_duration"] = True
+        review["decision"] = "approve"
+        review["batch_generation_allowed"] = True
+        for name in DIMENSIONS:
+            review["director_checks"][name] = {"status": "pass", "evidence": "可观察"}
+        errors = validate_review(review, plan)
+        self.assertTrue(any("技术检查未通过" in error for error in errors))
+        self.assertTrue(any("timecoded_findings" in error for error in errors))
+
+    def test_chapter_prompt_contains_routed_director_axes(self):
+        chapter = {"id": "CH01", "window": {"start": 0.0, "end": 2.0},
+                   "shot_ids": ["SH001"], "continuity_lock": {}}
+        axes = {
+            "light_contrast": "门外冷光，屋内暗部保留",
+            "color_exposure": "颜色来自旧布",
+            "lens_camera": "门框后固定观察",
+            "composition_space": "前景门框遮挡，人物居中景",
+            "active_traits": ["秩序中一次偏离"],
+        }
+        prompt_map = {"SH001": {
+            "meta": {"shot_id": "SH001", "window": {"start": 0.0, "end": 2.0},
+                     "lip_sync": False},
+            "story": {"before": "门关", "next": "人离开", "shot_delta": "门开"},
+            "performance": "人物推门", "scene": "门内", "camera": "固定机位",
+            "direction": {"method": axes, "edit_trigger": "门碰墙时切",
+                          "anti_ai": {"motion_rule": "手接触门后门才转动"}},
+        }}
+        compiled = compile_chapter(chapter, prompt_map, "16:9")
+        self.assertIn("门外冷光，屋内暗部保留", compiled["prompt"])
+        self.assertIn("秩序中一次偏离", compiled["prompt"])
+
+    def test_chapter_manifest_blocks_submission_until_user_selects_backend(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            (project / "state").mkdir()
+            (project / "prompts").mkdir()
+            (project / "state" / "style.json").write_text(
+                json.dumps({"aspect_ratio": "16:9"}), encoding="utf-8")
+            (project / "state" / "chapter_plan.json").write_text(json.dumps({
+                "production_policy": {"prototype_chapter": "CH01"},
+                "chapters": [{"id": "CH01", "window": {"start": 0.0, "end": 2.0},
+                              "shot_ids": ["SH001"], "continuity_lock": {}}],
+            }), encoding="utf-8")
+            (project / "prompts" / "SH001.json").write_text(json.dumps({
+                "meta": {"shot_id": "SH001", "window": {"start": 0.0, "end": 2.0},
+                         "lip_sync": False},
+                "story": {"before": "门关", "next": "人离开", "shot_delta": "门开"},
+                "performance": "人物推门", "scene": "门内", "camera": "固定机位",
+                "direction": {"method": {
+                    "light_contrast": "冷光", "color_exposure": "旧布承色",
+                    "lens_camera": "固定观察", "composition_space": "门框前景",
+                }, "edit_trigger": "门碰墙时切",
+                    "anti_ai": {"motion_rule": "接触后转动"}},
+            }), encoding="utf-8")
+            result = build_chapter_prompts(project)
+            manifest = json.loads((project / "state" / "generation_manifest.json")
+                                  .read_text(encoding="utf-8"))
+            self.assertFalse(result["submission_ready"])
+            self.assertFalse(manifest["submission_ready"])
+            self.assertIsNone(manifest["backend"])
+            self.assertEqual("awaiting_user_backend", manifest["status"])
+
+    def test_chapter_compiler_rejects_story_summary_without_director_axes(self):
         chapter = {"id": "CH01", "window": {"start": 0.0, "end": 5.0},
                    "shot_ids": ["SH001"], "continuity_lock": {}}
         prompt_map = {"SH001": {
@@ -147,9 +222,9 @@ class PipelineTests(unittest.TestCase):
             "camera": "门柱后观察",
         }}
         with self.assertRaisesRegex(ValueError, "未通过导演编译"):
-            compile_chapter(chapter, prompt_map, {})
+            compile_chapter(chapter, prompt_map, "16:9")
 
-    def test_chapter_audio_build_records_h3_audio_list_evidence(self):
+    def test_chapter_audio_build_stays_backend_neutral(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
             (project / "input").mkdir()
@@ -167,11 +242,29 @@ class PipelineTests(unittest.TestCase):
             build_audio_segments(project, sample_rate=16000)
             updated = json.loads((project / "state" / "chapter_plan.json")
                                  .read_text(encoding="utf-8"))
-            drive = updated["chapters"][0]["audio_drive"]
-            self.assertEqual("reference-to-video", drive["h3_mode"])
-            self.assertEqual("audio_list", drive["h3_param"])
-            self.assertTrue(drive["required"])
-            self.assertTrue((project / drive["local_path"]).is_file())
+            asset = updated["chapters"][0]["audio_asset"]
+            self.assertTrue(asset["contains_lip_sync_shots"])
+            self.assertTrue((project / asset["local_path"]).is_file())
+            self.assertNotIn("h3", json.dumps(asset).lower())
+            self.assertNotIn("audio_list", json.dumps(asset).lower())
+
+    def test_core_scripts_do_not_pin_video_backend(self):
+        active = [
+            ROOT / "scripts" / "storyboard_build.py",
+            ROOT / "scripts" / "prompt_build.py",
+            ROOT / "scripts" / "chapter_plan_build.py",
+            ROOT / "scripts" / "chapter_audio_build.py",
+            ROOT / "scripts" / "chapter_prompt_build.py",
+            ROOT / "scripts" / "stitch_chapters.py",
+        ]
+        forbidden = ("minimax", "lovart", "audio_list", "reference-to-video")
+        text = "\n".join(path.read_text(encoding="utf-8").lower() for path in active)
+        for token in forbidden:
+            self.assertNotIn(token, text)
+
+    def test_stitch_script_supports_package_import(self):
+        import scripts.stitch_chapters as stitch
+        self.assertTrue(callable(stitch.main))
 
     def test_fallback_keeps_many_lyrics_inside_short_silent_audio(self):
         with tempfile.TemporaryDirectory() as tmp:

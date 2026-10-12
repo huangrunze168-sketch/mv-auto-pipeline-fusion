@@ -58,7 +58,17 @@
     "props": ["黄铜罗盘", "翻开的案卷"],
     "palette_locked": true
   },
-  "director_ref": { "name": "王家卫", "intensity": "轻微" },  // 可选：轻微|明确|强烈，不覆盖已锁定事实
+  "director_ref": {
+    "name": "用户选择的导演参考",
+    "intensity": "轻微",
+    "axes": {
+      "light_contrast": "由所选导演文件推导的场景级决策",
+      "color_exposure": "由所选导演文件推导的场景级决策",
+      "lens_camera": "由所选导演文件推导的场景级决策",
+      "composition_space": "由所选导演文件推导的场景级决策"
+    },
+    "active_traits": ["只保留与本场景兼容的可执行特征"]
+  },
   "fingerprint": "sha256:...",    // 锁定后指纹化；提示词派生必须引用同一指纹
   "locked": true
 }
@@ -79,7 +89,7 @@
       "role": "perform",           // perform | narrative | insert
       "visual_concept": "主人公垂眸看手中罗盘，烛光晃动",
       "camera": "缓慢推近",
-      "backend": "lipsync",        // lipsync | general
+      "generation_role": "lip_sync", // lip_sync | narrative；不是后端名称
       "prompt_file": "prompts/SH001.json",
       "prompt_fingerprint": null,  // 关5通过后写入；重抽卡时比对失效则退回
       "repair": {                  // 局部修复判定：重抽前先判能否局部修
@@ -104,7 +114,7 @@
     "duration_sec": 3.68,
     "shot_type": "特写",
     "lip_sync": true,
-    "backend": "lipsync",
+    "generation_role": "lip_sync",
     "lyric_line": 1,
     "lyric_text": "画不完的圆",
     "style_fingerprint": "sha256:...",
@@ -128,7 +138,7 @@
 ## 5. state/ledger.jsonl —— 成本台账（追加制）
 
 ```json
-{"ts": "2026-10-12T14:00:00", "action": "submit", "shot_id": "SH001", "backend": "lipsync", "coins": 0, "cash_cny": 1.20, "note": "首镜试产"}
+{"ts": "2026-10-12T14:00:00", "action": "submit", "shot_id": "SH001", "backend": "user-selected-provider", "coins": 0, "cash_cny": 1.20, "note": "首镜试产"}
 ```
 
 字段固定 8 个：`ts / action / shot_id / backend / coins / cash_cny / duration_sec / note`。`action ∈ submit|retry|salvage|fail_refund|fit|concat`。汇总口径见 `scripts/ledger.py`。

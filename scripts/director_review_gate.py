@@ -52,6 +52,10 @@ def validate_review(review: dict, plan: dict) -> list[str]:
         errors.append("reviewed_media 必须是动态视频，联系表或图片不可作为审片对象")
     if review.get("watched_full_duration") is not True:
         errors.append("必须完整观看动态样片，联系表或首帧不能替代")
+    technical = review.get("technical_checks", {})
+    for name in ("container_and_duration", "audio_alignment"):
+        if technical.get(name) != "pass":
+            errors.append(f"技术检查未通过: {name}")
     checks = review.get("director_checks", {})
     for name in DIMENSIONS:
         item = checks.get(name, {})
@@ -59,6 +63,22 @@ def validate_review(review: dict, plan: dict) -> list[str]:
             errors.append(f"导演维度未通过: {name}")
         if not str(item.get("evidence", "")).strip():
             errors.append(f"导演维度缺少可观察证据: {name}")
+    findings = review.get("timecoded_findings", [])
+    if not findings:
+        errors.append("至少需要一条 timecoded_findings，证明审片基于动态时间线")
+    for index, finding in enumerate(findings, 1):
+        try:
+            start = float(finding.get("start_sec"))
+            end = float(finding.get("end_sec", start))
+        except (TypeError, ValueError):
+            errors.append(f"timecoded_findings[{index}] 时间码无效")
+            continue
+        if start < 0 or end < start:
+            errors.append(f"timecoded_findings[{index}] 时间范围无效")
+        if finding.get("dimension") not in DIMENSIONS:
+            errors.append(f"timecoded_findings[{index}] dimension 无效")
+        if not str(finding.get("observation", "")).strip():
+            errors.append(f"timecoded_findings[{index}] 缺少 observation")
     if review.get("decision") != "approve":
         errors.append("decision 必须为 approve")
     if review.get("batch_generation_allowed") is not True:

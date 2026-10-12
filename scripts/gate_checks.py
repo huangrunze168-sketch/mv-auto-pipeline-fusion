@@ -211,13 +211,17 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
     add(6, "非口型段无唱歌标记", lip or not SING_MARK_RE.search(perf + audio),
         SING_MARK_RE.search(perf + audio))
 
-    # 7 景别白名单
+    # 7 景别白名单 + 模型中立生成职责
+    expected_role = "lip_sync" if lip else "narrative"
     shot_match = (shot is None or
                   (meta.get("shot_type") == shot.get("shot_type") and
-                   lip == bool(shot.get("lip_sync"))))
+                   lip == bool(shot.get("lip_sync")) and
+                   shot.get("generation_role") == expected_role))
+    role_match = meta.get("generation_role") == expected_role
     add(7, "口型段景别白名单且与分镜一致",
-        ((not lip) or meta.get("shot_type") in LIPSYNC_WHITELIST) and shot_match,
-        meta.get("shot_type"))
+        ((not lip) or meta.get("shot_type") in LIPSYNC_WHITELIST) and
+        shot_match and role_match,
+        f"shot_type={meta.get('shot_type')} generation_role={meta.get('generation_role')}")
 
     # 8 禁手写秒数
     add(8, "正文无手写秒数", not SECONDS_RE.search(full_text), SECONDS_RE.search(full_text))
@@ -280,8 +284,8 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
     add(17, "导演四轴已展开", all(str(method.get(k, "")).strip() for k in required_axes),
         f"missing={[k for k in required_axes if not method.get(k)]}")
     director_name = style.get("director_ref", {}).get("name", "")
-    visible_prompt = " ".join(str(pr.get(k, "")) for k in
-                              ("style", "scene", "subject", "performance", "camera"))
+    visible_prompt = json.dumps({key: value for key, value in pr.items() if key != "meta"},
+                                ensure_ascii=False)
     add(18, "最终提示词不以导演姓名代替方法",
         not director_name or director_name not in visible_prompt,
         f"director={director_name}")
@@ -324,9 +328,13 @@ def check_storyboard(sb: dict, timeline: dict) -> list:
     total = sum(float(s["window"]["end"]) - float(s["window"]["start"]) for s in shots)
     add("合计等于全曲长", abs(total - song_dur) < 0.05, f"sum={total:.3f} song={song_dur}")
 
-    # ③ 口型景别白名单
+    # ③ 口型景别白名单 + 生成职责一致
     bad = [s["id"] for s in shots if s.get("lip_sync") and s.get("shot_type") not in LIPSYNC_WHITELIST]
-    add("口型景别白名单", not bad, ",".join(bad))
+    bad_roles = [s["id"] for s in shots
+                 if s.get("generation_role") !=
+                 ("lip_sync" if s.get("lip_sync") else "narrative")]
+    add("口型景别白名单且生成职责一致", not bad and not bad_roles,
+        f"bad_shot_type={bad} bad_generation_role={bad_roles}")
 
     # ④ 口型占比 45%±10%
     lip_n = sum(1 for s in shots if s.get("lip_sync"))

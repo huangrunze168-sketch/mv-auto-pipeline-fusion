@@ -20,7 +20,7 @@
 
 ## 二、逐镜构造顺序
 
-1. **冻结 MV 硬事实**：复制 `shot.id / window / duration_sec / lyric_line / lyric_text / shot_type / lip_sync / backend`，后续只读。
+1. **冻结 MV 硬事实**：复制 `shot.id / window / duration_sec / lyric_line / lyric_text / shot_type / lip_sync / generation_role`，后续只读。
 2. **恢复全片连续性**：从 `style.json`、人物指纹、场景母版和上一镜状态建立 Base Lock；跨镜复用服装、道具、空间拓扑、光源方向与材质状态。
 3. **建立 Scene Master**：为当前镜头确定一个具体时刻、人物物理动作、前中后景、可用空间、实际光源、物体状态与可实现的摄影机见证位置。
 4. **应用 Creative Grammar**：仅按需求选择导演、风格、摄影或 Dream Decode 分支；不默认堆叠全部卡片，不复制特定电影镜头。
@@ -32,7 +32,7 @@
 
 ### `state/story_plan.json` 最小契约
 
-`storyboard_build.py` 第一次运行只确定时间窗、歌词行、口型、景别和后端。Agent 必须按上游
+`storyboard_build.py` 第一次运行只确定时间窗、歌词行、口型、景别和生成职责，不选择后端。Agent 必须按上游
 Story Visual Development 编写 `state/story_plan.json`，再运行一次 `storyboard_build.py` 合并。
 文件必须声明 `method: "zy_story_visual_development"`，包含 `continuity_bible`，且 `shots`
 必须与时间分镜镜头 ID 完整一致。每镜至少包含：
@@ -44,7 +44,7 @@ Story Visual Development 编写 `state/story_plan.json`，再运行一次 `story
 - `action_physics`、`material_response`、`edit_trigger`
 - `shot_delta`
 
-故事层只能补充这些字段，不得覆盖 `window / lyric_line / lip_sync / shot_type / backend`。
+故事层只能补充这些字段，不得覆盖 `window / lyric_line / lip_sync / shot_type / generation_role`。
 缺少故事方案时 storyboard 会标记 `story_mode: timing_only`，`prompt_build.py` 必须阻断，
 不能悄悄退化成“歌词 + 通用动作”的模板提示词。
 
@@ -79,7 +79,7 @@ Story Visual Development 编写 `state/story_plan.json`，再运行一次 `story
 - 导演或参考图规则若改变场景母版、人物身份或歌词动作，视为漂移并拒绝。
 - 一次修复超过三个主导问题，返回 Scene Master 重建，不继续堆叠修饰词。
 - 任何提示词变动都会使 `prompt_fingerprint` 失效，必须重新过关 5。
-- 章节生成前必须先编译 H3 导演提示词并执行样片优先策略；完整动态审片通过前不得解锁批量生成。
+- 章节生成前必须先编译模型中立导演制作包；用户选定后端并由外部适配层按真实 schema 转码后，只允许先生成代表样片，完整动态审片通过前不得解锁批量生成。
 
 ## 六、许可与来源
 

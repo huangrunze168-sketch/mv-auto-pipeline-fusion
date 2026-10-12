@@ -45,7 +45,7 @@ def sha256_file(path: Path) -> str:
 def apply_story_plan(proj: Path, shots: list) -> tuple[str, dict, str | None]:
     """合并 Agent 按 ZY Story Visual Development 编写的故事方案。
 
-    时间窗、歌词、口型、景别和后端仍由 MV 层掌管；故事方案只能补充叙事与
+    时间窗、歌词、口型、景别和生成职责仍由 MV 层掌管；故事方案只能补充叙事与
     Scene Master，不能覆盖这些硬事实。
     """
     path = proj / "state" / "story_plan.json"
@@ -176,7 +176,7 @@ def main():
                 "role": "insert",
                 "visual_concept": f"间奏镜：{concept}",
                 "camera": "缓慢横移",
-                "backend": "general",
+                "generation_role": "narrative",
                 "prompt_file": f"prompts/SH{len(shots)+1:03d}.json",
                 "prompt_fingerprint": None,
                 "repair": {"mode": "none", "problems": []},
@@ -198,7 +198,7 @@ def main():
             "role": "perform" if lip else "narrative",
             "visual_concept": f"「{ln['text']}」：{concept}",
             "camera": "缓慢推近" if lip else "固定镜头",
-            "backend": "lipsync" if lip else "general",
+            "generation_role": "lip_sync" if lip else "narrative",
             "prompt_file": f"prompts/SH{k+1:03d}.json",
             "prompt_fingerprint": None,
             "repair": {"mode": "none", "problems": []},

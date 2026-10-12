@@ -90,7 +90,7 @@ style.json 可挂 `director_ref`（如 `{"name": "王家卫", "intensity": "轻�
 | 4 | 念白禁令 | 全文无「说…话」/「说「…」」句式 |
 | 5 | 非口型闭口声明 | 非口型段：audio_policy 含「嘴唇自然闭合」且 negative_prompt 含口型压制词 |
 | 6 | 非口型无唱歌标记 | 非口型段正文无 `唱|开口唱|歌声` |
-| 7 | 景别白名单 | lip_sync=true 时 shot_type ∈ 四类白名单 |
+| 7 | 景别与生成职责 | lip_sync=true 时 shot_type ∈ 四类白名单且 `generation_role=lip_sync`；非口型镜为 `narrative`，均与 storyboard 一致 |
 | 8 | 禁手写秒数 | 全文正文不含 `\d+(\.\d+)?\s*秒`（时长只进 meta.duration_sec） |
 | 9 | 时长一致 | `meta.duration_sec` 与 window 长差 < 0.05s |
 | 10 | 窗口合法 | start < end，且落在 [0, 全曲长] 内 |

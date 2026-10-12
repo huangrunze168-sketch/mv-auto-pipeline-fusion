@@ -6,18 +6,22 @@
 |---|---|---|---|
 | BUG-17 | MV 像一张图片在动 | 静帧预览和单参考动画被误当成正式叙事视频 | `render_preview.py` 继续明确为技术预览；正式章节必须有多个 Story Beat 与可见状态变化 |
 | BUG-18 | 人物参考图污染构图、背景和灯光 | 未严格分离 Reference Role | 人物图只锁 `likeness + wardrobe`；场景、构图和光线来自 Scene Master |
-| BUG-19 | H3 被误判为不能音频驱动 | 将“本次没有传音频”错误扩大为模型能力结论 | 以实际 schema 为准；H3 使用 `reference-to-video + image_list + audio_list` |
-| BUG-20 | `start-frame-to-video` 与音频输入冲突 | 未先读取模型模式互斥规则 | `chapter_audio_build.py` 记录 H3 模式；合成前检查 `audio_list` 证据 |
+| BUG-19 | H3 被误判为不能音频驱动 | 将“某次请求没有传音频”错误扩大为模型能力结论 | 任何后端能力都以用户选定后的实时 schema 为准；该次 H3 结论只属于试产记录，不进入核心 |
+| BUG-20 | `start-frame-to-video` 与音频输入冲突 | 未先读取当次模型模式互斥规则 | 模式与音频字段由外部适配层按真实 schema 决定；核心只提供音频资产与声画意图 |
 | BUG-21 | 母带回贴 PASS 被误报为口型 PASS | 验证器只证明最终音轨对齐，没有证明生成时接收音频或音素级唇形 | 分层措辞：音频驱动、音轨对齐、音素级口型分别验收 |
 | BUG-22 | 传入自造 `role` 导致 MCP 参数拒绝 | schema 未给 role 枚举却自行发明值 | 模型参数只能使用 `describe_model` 明确支持的字段和值；未声明枚举时不发明角色值 |
 | BUG-23 | H3 实际 1344×768，不是严格 16:9 | 把“768P”标签当成准确画布 | `stitch_chapters.py` 统一中心裁切到交付尺寸 |
-| BUG-24 | 逐镜导演逻辑在章节生成时丢失 | H3 请求临时写成剧情摘要，没有消费逐镜 Scene Master | `h3_prompt_build.py` 编译 Continuity + Shot Delta + 导演五轴 + 时间化镜头表 |
+| BUG-24 | 逐镜导演逻辑在章节生成时丢失 | 后端请求临时写成剧情摘要，没有消费逐镜 Scene Master | `chapter_prompt_build.py` 输出模型中立的 Continuity + Shot Delta + 导演五轴 + 时间化镜头表，外部适配不得删减 |
 | BUG-25 | “张艺谋式”成为空标签 | 导演姓名替代了光色、机位、空间和调度决策 | `prompt_build.py` 输出无姓名的四轴执行方法；轻微强度只启用物体承色与秩序中一次偏离 |
 | BUG-26 | AI 味由形容词和负面词处理 | 缺少动作重量、信息层级、材质受光和因果切镜 | Scene Master 新增强制字段：`visual_center / information_hierarchy / gaze_target / action_physics / material_response / edit_trigger` |
 | BUG-27 | 未审片就并行生成四章 | 把吞吐量优化置于导演判断之前 | `chapter_plan_build.py` 自动选代表章；`generation_plan.json` 默认只允许该章 |
 | BUG-28 | 联系表代替动态审片 | 静帧无法评价表演、运动、剪辑和口型 | `director_review_gate.py` 要求完整观看并提交九项可观察证据 |
 | BUG-29 | 技术 PASS 被当作成片 PASS | 容器、时长、音轨与艺术质量没有分层 | 导演门禁独立于技术检查；未批准只能输出文件名带 `preview` 的技术预览 |
 | BUG-30 | 发现 AI 味后立刻堆提示词/改代码 | 没先用时间码诊断主导失败 | 正确顺序：完整观看 → 时间码问题 → 最多三项主导失败 → 修上游 Scene Master/Shot Delta → 单章 A/B → 批量 |
+| BUG-31 | 把一次 H3 试产写进 Skill 主流程 | 混淆“用户选择的后端适配”与“模型中立核心” | 删除 H3 专属编译器；章节、音频、拼接全部恢复模型中立，生成清单默认不可提交 |
+| BUG-32 | 核心用 `backend=lipsync/general` 冒充后端选择 | 将镜头职责误命名为服务商路由 | 改为 `generation_role=lip_sync/narrative`；同一或不同后端均由用户决定 |
+| BUG-33 | 核心编译器写死单一导演分支 | 把一次用户选择误当成永久规则 | 导演路由在上游 Skill 完成；核心只消费已选四轴与特征，不识别导演姓名 |
+| BUG-34 | 章节 JSON 有导演四轴但文本提示词漏掉 | 结构化信息未进入真正交给适配层的制作包 | 每镜显式写入四轴和已选特征，并加回归测试 |
 
 ## 造梦师分镜最小导演契约
 

@@ -12,7 +12,7 @@ render_preview.py — 静帧预览成片（无视频生成 API 时的全链产�
 正式成片仍需步8接视频生成 API。
 
 用法:
-  python render_preview.py <project_dir> [--fps 24] [--width 720] [--height 1280]
+  python render_preview.py <project_dir> [--fps 24] [--width W --height H]
       [--output-name mv_preview.mp4]
 产出: output/mv_preview.mp4 + output/verification_report.json
 """
@@ -77,13 +77,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project_dir")
     ap.add_argument("--fps", type=float, default=24)
-    ap.add_argument("--width", type=int, default=720)
-    ap.add_argument("--height", type=int, default=1280)
+    ap.add_argument("--width", type=int)
+    ap.add_argument("--height", type=int)
     ap.add_argument("--output-name", default="mv_preview.mp4")
     a = ap.parse_args()
     proj = Path(a.project_dir)
     sb = json.loads((proj / "state" / "storyboard.json").read_text(encoding="utf-8"))
     timeline = json.loads((proj / "state" / "timeline.json").read_text(encoding="utf-8"))
+    if (a.width is None) != (a.height is None):
+        raise ValueError("--width 与 --height 必须同时提供")
+    if a.width is None:
+        style = json.loads((proj / "state" / "style.json").read_text(encoding="utf-8"))
+        raw_resolution = str(style.get("resolution", "")).lower().replace("×", "x")
+        try:
+            a.width, a.height = (int(value.strip())
+                                 for value in raw_resolution.split("x", 1))
+        except (ValueError, TypeError):
+            raise ValueError("style.resolution 必须为 WIDTHxHEIGHT，或显式传入 --width/--height")
     shots = sb.get("shots", [])
     if not shots:
         raise ValueError("storyboard.shots 不能为空")

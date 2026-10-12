@@ -59,12 +59,16 @@ def select_prototype(chapters: list[dict]) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project_dir")
-    ap.add_argument("--max-duration", type=float, default=15.0)
-    ap.add_argument("--model", default="MiniMax H3")
+    ap.add_argument("--max-duration", type=float, required=True,
+                    help="用户选定后端并核验契约后提供的单次生成时长上限")
     args = ap.parse_args()
     project = Path(args.project_dir)
     storyboard = load(project / "state" / "storyboard.json")
     story_plan = load(project / "state" / "story_plan.json")
+    style = load(project / "state" / "style.json")
+    aspect_ratio = str(style.get("aspect_ratio", "")).strip()
+    if not aspect_ratio:
+        raise ValueError("style.aspect_ratio 不能为空")
     if storyboard.get("story_mode") != "zy_story_visual_development":
         raise ValueError("只有通过 ZY Story Visual Development 的分镜才能聚合章节")
 
@@ -99,10 +103,10 @@ def main():
                 "lip_sync": bool(shot.get("lip_sync")),
             } for shot in group],
             "delivery": {
-                "aspect_ratio": "16:9",
-                "model": args.model,
-                "generation_mode": "reference-to-video",
-                "audio_input": "audio_list",
+                "aspect_ratio": aspect_ratio,
+                "backend": None,
+                "adapter": None,
+                "contract_status": "awaiting_user_selection",
                 "motion_rule": "人物、衣料、道具、环境与摄影机分别产生因果明确的真实运动；禁止静态图缩放或平移冒充视频",
             },
         }
@@ -113,7 +117,8 @@ def main():
         "method": "zy_story_visual_development_to_video_chapters",
         "source_story_plan_fingerprint": storyboard.get("story_plan_fingerprint"),
         "max_duration_sec": args.max_duration,
-        "model": args.model,
+        "backend": None,
+        "backend_contract_status": "awaiting_user_selection",
         "chapter_break_after": sorted(chapter_break_after),
         "production_policy": {
             "mode": "prototype_first",

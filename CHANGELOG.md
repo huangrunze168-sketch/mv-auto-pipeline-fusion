@@ -1,5 +1,16 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## V1.3.6 · 2026-10-12 · 恢复模型中立的完整 Skill 流程
+
+- 修复把一次 MiniMax H3 试产方案写死进核心流程的问题；删除 H3 专属章节编译器，改为模型中立 `chapter_prompt_build.py`。
+- `storyboard` 的 `backend` 改为 `generation_role`，只表达口型/叙事职责，不替用户选择服务商。
+- 章节计划不再默认模型或 15 秒；时长上限必须来自用户选定后端的已核验契约并显式传入。
+- 章节音频只生成可审计资产，不假设后端支持音频，也不发明 `audio_list` 等平台字段。
+- `generation_manifest.json` 默认 `submission_ready=false`；后端名称、schema、音频绑定、并发和真钱封顶全部留给用户决定与外部适配层。
+- 通用拼接器移除平台专属门禁，并修复作为 Python 包导入时的相对导入错误。
+- 删除核心编译器中的单一导演姓名分支；导演路由由上游 ZY Skill 完成，核心只消费已选四轴。
+- 修复章节文本遗漏导演四轴的问题；导演审核现在同时要求技术 PASS 与有效时间码观察记录。
+
 ## V1.3.5 · 2026-10-12 · H3 章节导演提示词编译
 
 - 修复逐镜 Scene Master 在章节生成阶段被压缩成剧情摘要的问题，新增 `h3_prompt_build.py`。

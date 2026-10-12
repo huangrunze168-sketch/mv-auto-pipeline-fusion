@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""按 chapter_plan.json 的窗口切出 H3 音频驱动片段并记录可审计摘要。"""
+"""按 chapter_plan.json 的窗口切出模型中立音频资产并记录可审计摘要。"""
 import argparse
 import hashlib
 import json
-import math
 import subprocess
 import sys
 from pathlib import Path
@@ -41,7 +40,7 @@ def build_audio_segments(project: Path, *, sample_rate: int = 44100) -> dict:
     target_dir = project / "input" / "chapter_audio"
     target_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "mode": "minimax_h3_reference_to_video_audio_driven",
+        "mode": "model_neutral_chapter_audio_assets",
         "source_audio": timeline["source_audio"],
         "source_sha256": sha256(source),
         "segments": [],
@@ -55,17 +54,15 @@ def build_audio_segments(project: Path, *, sample_rate: int = 44100) -> dict:
             "-t", f"{duration:.10f}", "-i", str(source), "-vn", "-ac", "2",
             "-ar", str(sample_rate), "-c:a", "pcm_s16le", str(output),
         ])
-        chapter["audio_drive"] = {
-            "required": any(bool(item.get("lip_sync"))
-                            for item in chapter.get("shot_deltas", [])),
+        chapter["audio_asset"] = {
+            "contains_lip_sync_shots": any(bool(item.get("lip_sync"))
+                                            for item in chapter.get("shot_deltas", [])),
             "local_path": str(output.relative_to(project)).replace("\\", "/"),
             "sha256": sha256(output),
             "source_window": {"start": start, "end": float(chapter["window"]["end"])},
-            "h3_duration_sec": min(15, max(5, math.ceil(duration))),
-            "h3_mode": "reference-to-video",
-            "h3_param": "audio_list",
+            "binding": "由用户选定后端的适配层决定；核心流程不假设字段名或音频能力",
         }
-        manifest["segments"].append({"chapter_id": chapter["id"], **chapter["audio_drive"]})
+        manifest["segments"].append({"chapter_id": chapter["id"], **chapter["audio_asset"]})
 
     plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n",
                          encoding="utf-8")

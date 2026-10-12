@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""把 ZY Scene Master / Continuity / Shot Deltas 编译为 MiniMax H3 章节导演提示词。"""
+"""把 ZY Scene Master / Continuity / Shot Deltas 编译为模型中立章节制作包。"""
 import argparse
 import hashlib
 import json
@@ -26,7 +26,7 @@ def relative_window(shot: dict, chapter_start: float) -> str:
     return f"{start:05.2f}-{end:05.2f}"
 
 
-def compile_chapter(chapter: dict, prompt_map: dict[str, dict], style: dict) -> dict:
+def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: str) -> dict:
     chapter_start = float(chapter["window"]["start"])
     shots = [prompt_map[sid] for sid in chapter["shot_ids"]]
     continuity = chapter.get("continuity_lock", {})
@@ -35,17 +35,15 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], style: dict) -> 
         meta = shot["meta"]
         direction = shot.get("direction", {})
         method = direction.get("method", {})
-        missing_axes = [key for key in
-                        ("light_contrast", "color_exposure", "lens_camera", "composition_space")
-                        if not str(method.get(key, "")).strip()]
+        missing_axes = [key for key in (
+            "light_contrast", "color_exposure", "lens_camera", "composition_space"
+        ) if not str(method.get(key, "")).strip()]
         if missing_axes or not str(direction.get("edit_trigger", "")).strip():
             raise ValueError(
                 f"{meta.get('shot_id')} 未通过导演编译：missing_axes={missing_axes} "
                 f"edit_trigger={bool(direction.get('edit_trigger'))}"
             )
         lip = bool(meta.get("lip_sync"))
-        mouth = (f"音频驱动歌唱口型；只唱这一行：{meta.get('lyric_text', '')}"
-                 if lip else "非演唱镜头；嘴唇自然闭合，不跟随人声开合")
         beats.append({
             "time": relative_window(shot, chapter_start),
             "shot_id": meta["shot_id"],
@@ -55,26 +53,16 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], style: dict) -> 
             "camera_witness": shot["camera"],
             "director_axes": method,
             "motion_physics": direction.get("anti_ai", {}).get("motion_rule", ""),
-            "mouth": mouth,
+            "performance_audio_intent": (
+                f"需要演唱口型；歌词：{meta.get('lyric_text', '')}" if lip
+                else "非演唱镜头；嘴唇自然闭合，不跟随人声开合"
+            ),
             "cut_reason": direction["edit_trigger"],
         })
 
-    director = [
-        "机位：摄影机必须能在空间平面图中落位；每镜最多一个主要运动，且由人物位移、视线或道具状态变化触发。",
-        "调度：动作包含准备、受力、完成与余波；手、脚、视线和道具关系连续，不向镜头展示服装或美貌。",
-        "光色：颜色附着于真实物体和实际光源；保留建筑遮挡造成的暗部，皮肤服从环境曝光。",
-        "空间：前中后景信息有主次；稳定轴线中的一次人物偏离承担叙事，红袖只作状态证据，不作全局滤镜。",
-        "剪辑：只按各镜 edit_trigger 切换；禁止广告蒙太奇、无因果溶解、变形转场和连续推脸。",
-    ]
-    anti_ai = [
-        "画面不是写真、海报、游戏 CG 或服装广告；人物不持续正面居中，不用慢动作甩袖和无意义回眸展示美貌。",
-        "皮肤保留细小纹理、局部泛红与受光差异，禁止蜡像皮、磨皮、对称脸和始终明亮的眼神光。",
-        "普通木、布、纸、石与金属允许暗、钝、旧和局部不可读；只让一到两个叙事区域清楚，禁止全画面 HDR、统一锐利和纹理堆砌。",
-        "风只作用于迎风面，衣袖、头发、尘沙和马具按重量、惯性、阻力与遮挡分别运动；人物脚步必须承重，手指接触道具后才改变道具状态。",
-        "禁止无来源轮廓光、装饰性雾、光束、镜头光斑、假景深、漂浮布料、随机手势、背景群众同步动作和静态图数字推拉。",
-    ]
     lines = [
-        "MiniMax H3 参考生视频；16:9 写实叙事音乐 MV。输入 image_list 只负责人物身份、服装和本章场景依据；输入 audio_list 是唯一演唱与节奏驱动。",
+        f"模型中立的 {aspect_ratio} 写实叙事音乐 MV 章节制作包。参考图只负责已声明的身份、服装或场景职责；不得继承未授权的构图、背景或灯光。",
+        "后端名称、请求模式、参数字段和音频绑定方式均由用户选定后，再由外部适配层按实测契约编译；本提示词不假设任何平台能力。",
         "",
         "【本章叙事弧】",
         f"开始状态：{shots[0]['story']['before']}",
@@ -88,10 +76,7 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], style: dict) -> 
         f"地理与方向轴：{continuity.get('location_topology', '')}",
         f"光源连续性：{continuity.get('lighting_bible', '')}",
         "",
-        "【导演执行逻辑】",
-        *[f"- {rule}" for rule in director],
-        "",
-        "【按音频时间执行的镜头】",
+        "【按时间执行的镜头】",
     ]
     for beat in beats:
         lines.extend([
@@ -100,18 +85,29 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], style: dict) -> 
             f"- 表演：{beat['current_action']}",
             f"- 空间：{beat['space_and_blocking']}",
             f"- 观看：{beat['camera_witness']}",
+            "- 导演四轴：" + "；".join(
+                str(beat["director_axes"].get(key, "")) for key in
+                ("light_contrast", "color_exposure", "lens_camera", "composition_space")
+            ),
+            "- 已选视觉特征：" + "；".join(
+                str(item) for item in beat["director_axes"].get("active_traits", [])
+            ),
             f"- 物理：{beat['motion_physics']}",
-            f"- 口型：{beat['mouth']}",
+            f"- 声画意图：{beat['performance_audio_intent']}",
             f"- 切点：{beat['cut_reason']}",
         ])
-    lines.extend(["", "【去 AI 化成片约束】", *[f"- {rule}" for rule in anti_ai]])
+    lines.extend([
+        "", "【去 AI 化成片约束】",
+        "- 不做写真、海报、游戏 CG 或服装广告；人物动作服务叙事，不持续正面居中展示美貌。",
+        "- 皮肤、布、木、纸、石与金属保留真实受光差异；只让一到两个叙事区域清楚。",
+        "- 身体、衣料、头发、尘沙与道具分别服从重量、惯性、阻力、遮挡和接触关系。",
+        "- 禁止无来源轮廓光、装饰雾、静态图数字推拉、无因果溶解和变形转场。",
+    ])
     prompt = "\n".join(lines).strip() + "\n"
     return {
         "chapter_id": chapter["id"],
-        "model": "minimax/minimax-h3",
-        "mode": "reference-to-video",
-        "director_name_in_prompt": False,
-        "timeline_source": "storyboard windows relative to chapter start",
+        "format": "model-neutral",
+        "backend": None,
         "beats": beats,
         "prompt": prompt,
         "prompt_sha256": digest(prompt),
@@ -122,48 +118,49 @@ def build(project: Path) -> dict:
     plan_path = project / "state" / "chapter_plan.json"
     plan = load(plan_path)
     style = load(project / "state" / "style.json")
+    aspect_ratio = str(style.get("aspect_ratio", "")).strip()
+    if not aspect_ratio:
+        raise ValueError("style.aspect_ratio 不能为空")
     prompt_map = {path.stem: load(path) for path in (project / "prompts").glob("SH*.json")}
-    out_dir = project / "prompts" / "h3_chapters"
+    out_dir = project / "prompts" / "chapters"
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs = []
     for chapter in plan.get("chapters", []):
         missing = [sid for sid in chapter.get("shot_ids", []) if sid not in prompt_map]
         if missing:
             raise FileNotFoundError("缺少逐镜提示词: " + ", ".join(missing))
-        compiled = compile_chapter(chapter, prompt_map, style)
+        compiled = compile_chapter(chapter, prompt_map, aspect_ratio)
         json_path = out_dir / f"{chapter['id']}.json"
         text_path = out_dir / f"{chapter['id']}.txt"
         json_path.write_text(json.dumps(compiled, ensure_ascii=False, indent=2) + "\n",
                              encoding="utf-8")
         text_path.write_text(compiled["prompt"], encoding="utf-8")
-        chapter["h3_prompt"] = {
+        chapter["chapter_prompt"] = {
             "path": str(text_path.relative_to(project)).replace("\\", "/"),
             "sha256": compiled["prompt_sha256"],
-            "compiler": "zy_scene_master_to_h3_director_v1",
+            "compiler": "zy_scene_master_to_model_neutral_chapter_v1",
         }
         outputs.append(str(text_path))
-    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n",
-                         encoding="utf-8")
-    policy = plan.get("production_policy", {})
-    prototype = policy.get("prototype_chapter")
-    generation_plan = {
-        "status": "prototype_only",
-        "model": "minimax/minimax-h3",
-        "generation_mode": "reference-to-video",
-        "required_inputs": ["image_list", "audio_list"],
-        "allowed_now": [prototype] if prototype else [],
-        "blocked_until_director_review": [
-            chapter["id"] for chapter in plan.get("chapters", [])
-            if chapter["id"] != prototype
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    prototype = plan.get("production_policy", {}).get("prototype_chapter")
+    manifest = {
+        "status": "awaiting_user_backend",
+        "submission_ready": False,
+        "backend": None,
+        "prototype_chapter": prototype,
+        "chapter_packages": outputs,
+        "required_user_decisions": [
+            "backend_name_and_access", "verified_schema", "duration_and_resolution_tiers",
+            "audio_capability_and_binding", "concurrency", "cash_limit_cny",
         ],
-        "unlock_condition": "director_review_gate.py check 返回 approved",
-        "warning": "只允许先生成代表样片；不得用联系表、首帧或技术 PASS 代替完整动态审片",
+        "warning": "核心流程不提交生成任务；用户选定后端并核验真实契约后，才由外部适配层编译和提交代表样片",
     }
-    generation_path = project / "state" / "generation_plan.json"
-    generation_path.write_text(json.dumps(generation_plan, ensure_ascii=False, indent=2) + "\n",
-                               encoding="utf-8")
+    manifest_path = project / "state" / "generation_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                             encoding="utf-8")
     return {"chapters": len(outputs), "outputs": outputs,
-            "generation_plan": str(generation_path), "allowed_now": generation_plan["allowed_now"]}
+            "generation_manifest": str(manifest_path), "submission_ready": False}
 
 
 def main():
