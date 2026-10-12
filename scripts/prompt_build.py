@@ -15,7 +15,32 @@ if hasattr(sys.stdout, "reconfigure"):
 REQUIRED_STORY_FIELDS = (
     "story_beat", "narrative_before", "current_action", "implied_next",
     "space", "blocking", "props", "light", "camera_witness", "shot_delta",
+    "visual_center", "information_hierarchy", "gaze_target", "action_physics",
+    "material_response", "edit_trigger",
 )
+
+
+def compile_director_method(style: dict, shot: dict) -> dict:
+    """将上游导演路由展开成可执行决策，禁止只把导演姓名发给模型。"""
+    ref = style.get("director_ref", {})
+    name = ref.get("name", "")
+    intensity = ref.get("intensity", "明确")
+    method = {
+        "strength": intensity,
+        "light_contrast": f"沿用实际光源：{shot['light']}；保留建筑遮挡形成的暗部，不为脸补装饰性轮廓光",
+        "color_exposure": "颜色必须附着在真实物体和光源上；皮肤服从环境曝光，不单独美容提亮",
+        "lens_camera": f"{shot['camera_witness']}；每镜最多一个主要摄影机动作，运动由人物位移、视线或道具状态改变触发",
+        "composition_space": f"视觉中心是{shot['visual_center']}；信息顺序为{shot['information_hierarchy']}；人物调度：{shot['blocking']}",
+    }
+    if name == "张艺谋":
+        # 轻微强度只启用两个兼容特征：物体承载颜色、稳定轴线中的一次偏离。
+        method["active_traits"] = [
+            "主导色必须来自红袖、旗帜、土墙或火光等真实物体，禁止全局红色滤镜",
+            "在稳定空间轴和重复秩序中，只让当前人物动作形成一次明确偏离；禁止为图案而堆群众",
+        ]
+    else:
+        method["active_traits"] = ["导演标签不进入最终提示词；仅保留上述可执行四轴"]
+    return method
 
 
 def load(path: Path):
@@ -51,8 +76,6 @@ def main():
     character_fp = sha256_file(protagonist) if protagonist else "none"
     line_map = {line["index"]: line for line in timeline.get("lines", [])}
     keywords = "，".join(style.get("visual_keywords", []))
-    director = style.get("director_ref", {})
-    director_text = (f"，{director.get('name')}式克制构图" if director.get("name") else "")
 
     built = []
     for shot in storyboard.get("shots", []):
@@ -62,12 +85,15 @@ def main():
         line = line_map.get(shot.get("lyric_line"))
         lyric = line.get("text", "") if line else ""
         lip = bool(shot.get("lip_sync"))
-        scene = (f"{shot['space']}；道具与状态：{shot['props']}；"
-                 f"实际光源：{shot['light']}；空间与人物调度：{shot['blocking']}")
+        scene = (f"{shot['space']}；视觉中心：{shot['visual_center']}；"
+                 f"信息层级：{shot['information_hierarchy']}；道具与状态：{shot['props']}；"
+                 f"实际光源：{shot['light']}；材质受光与磨损：{shot['material_response']}；"
+                 f"空间与人物调度：{shot['blocking']}")
         subject = (f"参考图只负责人物身份与服装：参考图中的年轻女子，{style.get('wardrobe', '')}；"
                    "跨镜保持五官比例、发型、耳饰、衣料纹样与层次完全一致，不继承参考图构图、背景或灯光"
                    if protagonist else "风沙中的边关环境与被岁月磨损的器物")
-        base_action = shot["current_action"]
+        base_action = (f"{shot['current_action']}；视线目标：{shot['gaze_target']}；"
+                       f"动作物理：{shot['action_physics']}")
         if lip:
             performance = f"{base_action}，唇形随歌词自然开合\n{lyric}"
             audio_policy = f"人声驱动口型，逐字对齐歌词「{lyric}」"
@@ -98,13 +124,22 @@ def main():
                 "next": shot["implied_next"],
                 "shot_delta": shot["shot_delta"],
             },
-            "style": f"{style.get('style_name', '')}，{keywords}{director_text}",
+            "style": f"{style.get('style_name', '')}，{keywords}",
             "scene": scene,
             "subject": subject,
             "performance": performance,
             "camera": f"{shot['shot_type']}，{shot['camera_witness']}，{shot.get('camera', '固定镜头')}，真实透视按空间关系自然变化",
             "audio_policy": audio_policy,
             "negative_prompt": negative,
+            "direction": {
+                "method": compile_director_method(style, shot),
+                "edit_trigger": shot["edit_trigger"],
+                "anti_ai": {
+                    "clarity_budget": "仅一到两个叙事区域完整清楚，其余按距离、遮挡和实际光照自然退让",
+                    "motion_rule": "身体、衣料、头发、尘沙与道具分别服从重量、惯性、阻力和接触关系",
+                    "reject": "写真摆拍、服装广告、蜡像皮、全局HDR、均匀锐利、无来源雾光、静态图数字推拉、变形转场",
+                },
+            },
         }
         out = prompts_dir / f"{shot['id']}.json"
         out.write_text(json.dumps(prompt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

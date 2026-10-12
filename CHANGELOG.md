@@ -1,5 +1,15 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## V1.3.5 · 2026-10-12 · H3 章节导演提示词编译
+
+- 修复逐镜 Scene Master 在章节生成阶段被压缩成剧情摘要的问题，新增 `h3_prompt_build.py`。
+- 将导演标签展开为机位、演员调度、光色、空间和剪辑五个可执行轴，最终提示词不再依赖导演姓名或“电影感”形容词。
+- 每章按时间轴编入 Story Beat、Shot Delta、物理见证位置、口型状态和因果切点。
+- 去 AI 化从负面词升级为成片行为约束：动作重量与惯性、材质信息层级、受光差异、非广告构图、禁止数字推拉和变形转场。
+- Scene Master 新增强制字段：视觉中心、信息层级、视线目标、动作物理、材质响应和切镜触发。
+- 新增样片优先策略与 `director_review_gate.py`；未经完整动态审片，批量生成与正式成片合成均被阻断。
+- 新增 `references/dialogue-bug-review.md`，归档本次对话暴露的产品与工作流缺陷。
+
 ## V1.3.4 · 2026-10-12 · 修复 MiniMax H3 音频驱动模式
 
 - 修正能力判断：MiniMax H3 支持 `audio_list`，但该参数属于 `reference-to-video`；`start-frame-to-video` 模式会排除音频输入。

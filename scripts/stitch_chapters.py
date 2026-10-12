@@ -8,6 +8,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from director_review_gate import approved
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -34,8 +36,15 @@ def main():
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--output-name", default="final_minimax_h3_mv.mp4")
+    ap.add_argument("--allow-unreviewed-preview", action="store_true",
+                    help="仅输出技术预览；不会被认定为正式成片")
     args = ap.parse_args()
     project = Path(args.project_dir).resolve()
+    review_ok, review_errors = approved(project)
+    if not review_ok and not args.allow_unreviewed_preview:
+        raise ValueError("导演样片审片未通过，禁止合成为正式成片: " + "; ".join(review_errors))
+    if not review_ok and "preview" not in args.output_name.lower():
+        raise ValueError("未审片产物的 output-name 必须包含 preview")
     plan = json.loads((project / "state" / "chapter_plan.json").read_text(encoding="utf-8"))
     missing_audio_drive = [chapter.get("id", "?") for chapter in plan.get("chapters", [])
                            if chapter.get("audio_drive", {}).get("h3_param") != "audio_list"]

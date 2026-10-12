@@ -28,7 +28,7 @@
    - 制作参考帧：可按 `vendor/zy-cinematic-realism/references/model-routing.md` 选择静帧适配器。
    - 生成视频：默认输出模型中立的物理描述；只有拿到真实视频后端字段表后才转成后端原生格式。
 6. **降级映射到六段式**：按下表写入 `style → scene → subject → performance → camera`，最后由 MV 层独立写 `audio_policy` 与歌词。
-7. **清理与门禁**：应用 anti-AI cleanup，去掉无因果的雾、轮廓光、广告摆拍和空泛质量词，然后运行 `gate_checks.py gate5`；16 项未全绿不得提交生成。
+7. **清理与门禁**：应用 anti-AI cleanup，去掉无因果的雾、轮廓光、广告摆拍和空泛质量词，然后运行 `gate_checks.py gate5`；20 项未全绿不得提交生成。
 
 ### `state/story_plan.json` 最小契约
 
@@ -40,6 +40,8 @@ Story Visual Development 编写 `state/story_plan.json`，再运行一次 `story
 - `id`、`lyric_line`
 - `story_beat`、`narrative_before`、`current_action`、`implied_next`
 - `space`、`blocking`、`props`、`light`、`camera_witness`
+- `visual_center`、`information_hierarchy`、`gaze_target`
+- `action_physics`、`material_response`、`edit_trigger`
 - `shot_delta`
 
 故事层只能补充这些字段，不得覆盖 `window / lyric_line / lip_sync / shot_type / backend`。
@@ -55,6 +57,7 @@ Story Visual Development 编写 `state/story_plan.json`，再运行一次 `story
 | 身份、服装、身体位置、与道具关系 | `subject` | 主人公图承担 `likeness + wardrobe`，不得接管构图、背景、灯光或画风 |
 | 单一具体动作、姿态、视线、关系变化 | `performance` | 口型段歌词原文独立置于段尾；非口型段不出现唱歌标记 |
 | 物理可行机位、既定景别内的距离/高度、运动与焦点行为 | `camera` | 最后派生；不得更改 `shot_type` |
+| 视觉中心、信息层级、动作受力、材质响应、切镜原因、导演四轴 | `direction` | 导演姓名不作为执行指令；必须翻译为可观察、可机检的决策 |
 | 无对应项 | `audio_policy` | 完全由 MV 层根据 `lip_sync` 写入 |
 | 场景特定排除项 + 口型排除项 | `negative_prompt` | 不粘贴泛化负面词墙；MV 口型规则优先 |
 
@@ -76,6 +79,7 @@ Story Visual Development 编写 `state/story_plan.json`，再运行一次 `story
 - 导演或参考图规则若改变场景母版、人物身份或歌词动作，视为漂移并拒绝。
 - 一次修复超过三个主导问题，返回 Scene Master 重建，不继续堆叠修饰词。
 - 任何提示词变动都会使 `prompt_fingerprint` 失效，必须重新过关 5。
+- 章节生成前必须先编译 H3 导演提示词并执行样片优先策略；完整动态审片通过前不得解锁批量生成。
 
 ## 六、许可与来源
 

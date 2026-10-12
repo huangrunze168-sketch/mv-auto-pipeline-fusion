@@ -6,11 +6,11 @@ description: >
   触发词：做 MV、音乐视频、口型对齐、MV 流水线、给这首歌出画面。
 ---
 
-# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.3.4）
+# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.3.5）
 
 > 一句话需求：**给一首歌和一张图，出来一支完整的、口型对得上的音乐 MV。**
 > 技术基线：全 API（无需 GPU）· 运行形态：Agent Skill。
-> V1.3.4：ZY 故事镜按视频模型时长聚合为章节；MiniMax H3 使用 `reference-to-video` 的 `image_list + audio_list` 输入，实现逐章音频驱动，再做时长贴合、严格 16:9 归一化与同源母带回贴。详见 CHANGELOG.md。
+> V1.3.5：ZY Scene Master 增加视觉中心、信息层级、视线、动作物理、材质响应与因果切镜；MiniMax H3 章节提示词保留导演五轴，并以样片动态审片门禁阻止未验证的批量生成。详见 CHANGELOG.md。
 
 ## 输入 / 输出
 
@@ -47,7 +47,7 @@ project/
 | 2 | 风格锁定：必须先于资产，服装色调都依赖风格 → style.json | 关 2 | |
 | 3 | 人物与资产：主人公图指纹化、母带全片只上传一次；无主角模式跳过 | 关 3 | |
 | 4 | 时间分镜：按歌曲线切段并确定口型与景别；随后调用 ZY Cinematic Realism 的 Story Visual Development 编写 `story_plan.json`，再次合并为故事分镜 | 关 4 | |
-| 5 | 提示词派生：从 ZY Story Source Ledger + Continuity Bible + Scene Master + Shot Delta 编译为 MV 六段式；缺少故事方案时禁止模板化降级，**16 项机检全绿才放行** | 关 5 | ⛔ 硬 |
+| 5 | 提示词派生：从 ZY Story Source Ledger + Continuity Bible + Scene Master + Shot Delta 编译为 MV 六段式；缺少故事方案时禁止模板化降级，**20 项机检全绿才放行** | 关 5 | ⛔ 硬 |
 | 6 | 音乐窗口与口型核对：窗口首尾相接、合计=全曲长、口型与景别一致，**任何环节不许手写秒数** | 关 6 | ⛔ 硬 |
 | 7 | 工作流体检 + 首镜试产：先拉真实节点表再提交；首镜实测契约 / 分辨率 / 音频策略。**前置门限：视频生成后端必须由用户提供（名称 / 凭证 / 并发 / 真钱封顶），skill 只提问不内置；未提供则流程止步于关 6 + 静帧预览成片** | | |
 | 8 | 批量生成：多路并发、断点续跑、在途任务救回；每 10–15 分钟主动汇报 | | |
@@ -79,6 +79,8 @@ project/
 - **电影化提示词构造**（`references/zy-cinematic-integration.md`）：使用 `vendor/zy-cinematic-realism/` 的 Scene Master、Creative Grammar、连续性与局部修复方法；只负责视觉构造，不得改写 timeline 窗口、歌词、口型、音频策略或后端契约。
 - **长视频章节**（`scripts/chapter_plan_build.py`）：模型最大时长是硬上限，ZY 故事断点优先；每章继续携带 Continuity Bible 与逐镜 Shot Deltas。
 - **章节音频驱动**（`scripts/chapter_audio_build.py`）：从母带按章节窗口裁出 WAV，记录来源窗口与 SHA-256；MiniMax H3 必须走 `reference-to-video`，人物/场景放入 `image_list`，对应章节音频放入 `audio_list`。`start-frame-to-video` 明确排除 `audio_list`，不得误用。
+- **H3 导演提示词编译**（`scripts/h3_prompt_build.py`）：禁止把逐镜 Scene Master 压成剧情摘要。按时间轴把每镜的故事变化、演员动作、空间调度、物理机位、口型状态和切镜理由编入章节；导演名只作为上游路由，成片提示词必须展开为机位、调度、光色、空间与剪辑五轴，并加入材质层级和运动物理的去 AI 化约束。
+- **样片优先与导演审片**（`scripts/director_review_gate.py`）：章节计划自动选择口型与叙事变化最多的代表章。完整观看动态样片后，必须逐项记录故事可读性、表演、调度/视线、物理机位、运动物理、光线/材质、连续性、剪辑和口型证据。联系表、首帧、API 成功、容器时长和音轨对齐都不能代替导演通过；未批准不得批量生成或标记正式成片。
 - **章节成片**（`scripts/stitch_chapters.py`）：只接受带 `audio_drive.h3_param=audio_list` 证据的章节；逐章时长贴合后拼接，后端非严格 16:9 输出统一到交付画布，再贴回与驱动片段同源的母带。
 - **口型边界**：H3 已接收逐章原始人声音频时可称“音频驱动口型”；没有权威 ASR/音素级验收时，仍不得进一步声称“逐字口型 PASS”。
 - **后端门限**：视频生成后端（普通镜头 / 口型镜头）一律由用户提供，skill 只提问（后端名称、凭证、并发、真钱封顶），**不内置任何后端适配代码与默认值**；未提供后端时交付物止于关 1–6 + 静帧预览成片。
@@ -94,7 +96,7 @@ project/
 - `references/architecture.md` — 四层架构与数据流
 - `references/data-schemas.md` — timeline / storyboard / prompt / ledger 全 schema
 - `references/gates-spec.md` — 八道关逐项机检规格
-- `references/prompt-framework.md` — 六段式提示词框架与 14 项机检
+- `references/prompt-framework.md` — 六段式提示词框架与 20 项机检
 - `references/zy-cinematic-integration.md` — ZY Cinematic Realism → MV 六段式提示词适配与优先级
 - `references/api-backends.md` — 全 API 依赖清单与成本模型
 - `vendor/zy-cinematic-realism/` — 造梦师 v2.5.0 原名上游组件（步骤 5 按需加载；CC BY-NC 4.0，作者 ZY / popopo-99，详见目录内 `LICENSE` / `NOTICE.md`）

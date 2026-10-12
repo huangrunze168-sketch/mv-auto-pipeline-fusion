@@ -25,14 +25,27 @@ python scripts/chapter_plan_build.py <project_dir> --max-duration 15 --model "Mi
 # 3.2 从母带按章节窗口切出音频；H3 必须使用 reference-to-video 的 audio_list
 python scripts/chapter_audio_build.py <project_dir>
 
+# 3.3 把逐镜 Scene Master 编译为带导演调度、物理运动、切点与去 AI 化约束的 H3 章节提示词
+python scripts/h3_prompt_build.py <project_dir>
+
+# 3.4 初始化样片审片表；此时 generation_plan.json 只允许一个代表章节
+python scripts/director_review_gate.py init <project_dir>
+
+# 完整观看动态样片、填写 state/director_review.json 后再检查；未 approved 禁止批量生成
+python scripts/director_review_gate.py check <project_dir>
+
 # 4. 硬门禁机检（关1/关5/关6，同时写 gates/*.json + gates/*.html）
 python scripts/gate_checks.py gate5 <project_dir>
 
 # 5. 多场景关键帧预览成片（优先 input/scene_*.png；无场景图才回退人物参考图）
 python scripts/render_preview.py <project_dir>
 
-# MiniMax H3 以 image_list + audio_list 生成章节，并经 duration_fit.py 输出 clips/CH*_fitted.mp4 后：
+# 审片批准后，MiniMax H3 以 image_list + audio_list 生成其余章节并完成 duration_fit：
 python scripts/stitch_chapters.py <project_dir> --width 1280 --height 720
+
+# 未审片只能显式输出技术预览，且文件名必须包含 preview
+python scripts/stitch_chapters.py <project_dir> --allow-unreviewed-preview \
+  --output-name technical_preview.mp4
 
 # 6. 对齐三验（建议同时传入从成片提取的候选音轨，避免把母带与自身比较）
 python scripts/align_verify.py input/song_16k.wav state/storyboard.json state/timeline.json \
@@ -52,6 +65,8 @@ python -m unittest discover -s tests -v
 | prompt_build.py | 从 ZY Scene Master / Continuity Bible 编译提示词；缺少故事方案时阻断 |
 | chapter_plan_build.py | 按视频模型最长时长聚合连续镜头，保留 Continuity Bible 与 Shot Deltas |
 | chapter_audio_build.py | 按章节窗口裁出原始人声音频，生成 H3 `audio_list` 驱动清单与 SHA-256 审计记录 |
+| h3_prompt_build.py | 将 ZY Scene Master、Continuity Bible、Shot Deltas 编译为 H3 章节导演提示词；导演四轴外加因果剪辑轴 |
+| director_review_gate.py | 强制完整观看单章动态样片并分别记录技术检查与九项导演检查；批准前阻断批量生成/正式合成 |
 | stitch_chapters.py | 只接受已标记 `audio_list` 驱动的章节，拼接、修正严格 16:9 并贴回同源母带 |
 | duration_fit.py | 时长贴合（帧网格+流复制快路径） |
 | align_verify.py | 对齐三验（纯标准库） |

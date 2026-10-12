@@ -40,6 +40,22 @@ def group_shots(shots: list, max_duration: float, break_after: set[str] | None =
     return groups
 
 
+def select_prototype(chapters: list[dict]) -> str:
+    """优先选择口型与叙事变化最多的一章做样片，禁止直接全量试错。"""
+    if not chapters:
+        raise ValueError("chapters 不能为空")
+    ranked = sorted(
+        chapters,
+        key=lambda chapter: (
+            sum(bool(shot.get("lip_sync")) for shot in chapter.get("shot_deltas", [])),
+            len(chapter.get("shot_deltas", [])),
+            float(chapter.get("duration_sec", 0)),
+        ),
+        reverse=True,
+    )
+    return ranked[0]["id"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project_dir")
@@ -92,12 +108,20 @@ def main():
         }
         chapters.append(chapter)
 
+    prototype_id = select_prototype(chapters)
     plan = {
         "method": "zy_story_visual_development_to_video_chapters",
         "source_story_plan_fingerprint": storyboard.get("story_plan_fingerprint"),
         "max_duration_sec": args.max_duration,
         "model": args.model,
         "chapter_break_after": sorted(chapter_break_after),
+        "production_policy": {
+            "mode": "prototype_first",
+            "prototype_chapter": prototype_id,
+            "allowed_before_director_review": [prototype_id],
+            "batch_generation_requires": "state/director_review.json decision=approve",
+            "technical_pass_is_not_director_pass": True,
+        },
         "chapters": chapters,
     }
     out = project / "state" / "chapter_plan.json"

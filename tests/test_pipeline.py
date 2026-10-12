@@ -16,8 +16,11 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(ROOT))
 
 from scripts.gate_checks import REF_DUTIES, check_storyboard
-from scripts.chapter_plan_build import group_shots
+from scripts.chapter_plan_build import group_shots, select_prototype
 from scripts.chapter_audio_build import build_audio_segments
+from scripts.director_review_gate import DIMENSIONS, initial_review, validate_review
+from scripts.h3_prompt_build import compile_chapter
+from scripts.prompt_build import compile_director_method
 from scripts.render_preview import resolve_visual_asset
 
 
@@ -94,6 +97,57 @@ class PipelineTests(unittest.TestCase):
         groups = group_shots(shots, 15.0, {"SH002"})
         self.assertEqual([[s["id"] for s in group] for group in groups],
                          [["SH001", "SH002"], ["SH003"]])
+
+    def test_prototype_prefers_lipsync_and_story_complexity(self):
+        chapters = [
+            {"id": "CH01", "duration_sec": 14, "shot_deltas": [
+                {"lip_sync": False}, {"lip_sync": False}, {"lip_sync": False}]},
+            {"id": "CH02", "duration_sec": 12, "shot_deltas": [
+                {"lip_sync": True}, {"lip_sync": True}]},
+            {"id": "CH03", "duration_sec": 11, "shot_deltas": [
+                {"lip_sync": True}, {"lip_sync": True}, {"lip_sync": True}]},
+        ]
+        self.assertEqual(select_prototype(chapters), "CH03")
+
+    def test_director_name_is_expanded_to_executable_axes(self):
+        method = compile_director_method(
+            {"director_ref": {"name": "张艺谋", "intensity": "轻微"}},
+            {"light": "门外冷天光与室内余火", "camera_witness": "门柱后腰高机位",
+             "visual_center": "鼓槌停在鼓面上方的手",
+             "information_hierarchy": "先读手与鼓，再读侧脸，最后读空城门",
+             "blocking": "人物朝右侧关外，保持方向轴"},
+        )
+        self.assertTrue(all(method[key] for key in
+                            ("light_contrast", "color_exposure", "lens_camera",
+                             "composition_space")))
+        self.assertNotIn("张艺谋", json.dumps(method, ensure_ascii=False))
+        self.assertIn("真实物体", method["active_traits"][0])
+
+    def test_director_review_blocks_contact_sheet_only(self):
+        plan = {"production_policy": {"prototype_chapter": "CH03"}}
+        review = initial_review(plan)
+        review["reviewed_media"] = "output/contact_sheet.jpg"
+        review["watched_full_duration"] = True
+        review["decision"] = "approve"
+        review["batch_generation_allowed"] = True
+        for name in DIMENSIONS:
+            review["director_checks"][name] = {"status": "pass", "evidence": "有证据"}
+        errors = validate_review(review, plan)
+        self.assertTrue(any("动态视频" in error for error in errors))
+
+    def test_h3_compiler_rejects_story_summary_without_director_axes(self):
+        chapter = {"id": "CH01", "window": {"start": 0.0, "end": 5.0},
+                   "shot_ids": ["SH001"], "continuity_lock": {}}
+        prompt_map = {"SH001": {
+            "meta": {"shot_id": "SH001", "window": {"start": 0.0, "end": 5.0},
+                     "lip_sync": False},
+            "story": {"before": "门未开", "next": "人物离开", "shot_delta": "门打开"},
+            "performance": "人物推门",
+            "scene": "门内到门外",
+            "camera": "门柱后观察",
+        }}
+        with self.assertRaisesRegex(ValueError, "未通过导演编译"):
+            compile_chapter(chapter, prompt_map, {})
 
     def test_chapter_audio_build_records_h3_audio_list_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

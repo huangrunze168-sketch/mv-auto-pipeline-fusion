@@ -33,6 +33,8 @@ CONCEPTS_NONLIP = ["环境空镜承接段落呼吸，不入人声口型",
 REQUIRED_STORY_FIELDS = {
     "story_beat", "narrative_before", "current_action", "implied_next",
     "space", "blocking", "props", "light", "camera_witness", "shot_delta",
+    "visual_center", "information_hierarchy", "gaze_target", "action_physics",
+    "material_response", "edit_trigger",
 }
 
 

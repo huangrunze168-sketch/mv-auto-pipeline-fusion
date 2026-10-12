@@ -1,4 +1,4 @@
-# 六段式提示词框架 + 唱歌专用规范 + 14 项机检
+# 六段式提示词框架 + 唱歌专用规范 + 20 项机检
 
 > 铁律 C 的完整落地。六段式结构 × 导演 Agent 出稿 × 派生顺序纪律（具体瞬间 / 场景母版 / 导演轴 / 参考职责 / 局部修复判定）。
 
@@ -78,7 +78,7 @@ style.json 可挂 `director_ref`（如 `{"name": "王家卫", "intensity": "轻�
 - audio_policy 强制注入声明：「嘴唇自然闭合，不跟随人声开合」。
 - negative_prompt 必须含口型压制词：`lip movement, talking, singing mouth`。
 
-## 六、14 项机检清单（关 5 · gate_checks.py gate5）
+## 六、20 项机检清单（关 5 · gate_checks.py gate5）
 
 **基础 11 项**
 
@@ -96,13 +96,19 @@ style.json 可挂 `director_ref`（如 `{"name": "王家卫", "intensity": "轻�
 | 10 | 窗口合法 | start < end，且落在 [0, 全曲长] 内 |
 | 11 | 指纹一致 | `meta.style_fingerprint` == style.json.fingerprint；character_fingerprint 非空且非 "REF"（有主角时） |
 
-**扩展 3 项（#12–#14）**
+**ZY 故事与导演扩展项（#12–#20）**
 
 | # | 检查项 | 判据 |
 |---|---|---|
 | 12 | 具体瞬间 | performance ≥10 字且含至少一个具体动作词（词表内置 gate_checks.py） |
 | 13 | 场景母版一致 | style.json 有已锁定 scene_master 时，本镜 scene 命中 ≥1 个锁定空间/光源/道具关键词 |
 | 14 | 参考职责声明 | `reference_duties` 每项在枚举内；有主人公图时必须同时含 `likeness + wardrobe` |
+| 15 | ZY 故事结构 | `beat / before / next / shot_delta` 完整，不接受歌词动作模板 |
+| 16 | 故事指纹 | `story_plan_fingerprint` 已锁定 |
+| 17 | 导演四轴展开 | 光与反差、色彩与曝光、镜头与机位、构图与空间均为可执行描述 |
+| 18 | 导演姓名去标签化 | 最终六段式正文不以导演姓名或“某某式”代替视觉方法 |
+| 19 | 信息层级与运动物理 | `direction.anti_ai` 同时定义清晰度预算与重量/惯性/接触关系 |
+| 20 | 因果切镜 | `direction.edit_trigger` 明确由动作、视线、道具状态或句尾触发 |
 
 ## 七、局部修复判定 —— 步骤 9 重抽卡的前置层
 
@@ -120,7 +126,7 @@ style.json 可挂 `director_ref`（如 `{"name": "王家卫", "intensity": "轻�
 ## 八、导演 Agent 出稿守则
 
 1. **先读 timeline 再想画面**（铁律 A）：Agent 输入只有 timeline + style(含母版) + 已锁定资产，输出只填 `visual_concept / camera / shot_type / lip_sync`，窗口和切点它无权改。
-2. **瞬间优先**：每镜先定「谁在此刻做什么、光从哪来」，camera 段最后派生。
+2. **瞬间优先**：每镜先定「谁在此刻做什么、视觉中心是什么、信息先后如何、动作怎样受力、光从哪来、材质怎样响应、为什么切镜」，camera 段最后派生。
 3. **口型节奏规划**：副歌优先排口型（观众预期最强处），主歌铺叙事镜；按「连续 ≤3、目标占比 45%」自动校平。
 4. **表演一致**：同一 segment 内 subject 情绪递进，跨 segment 服装道具不得漂移（都锚在 style.json + 场景母版）。
 5. **无主角模式**：subject 改写为环境主体（空镜/群像/道具特写/背影），lip_sync 一律 false，画面靠剪辑节奏对拍。

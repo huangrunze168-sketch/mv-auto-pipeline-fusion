@@ -5,7 +5,7 @@ gate_checks.py — 关5/关6 硬门禁机检器（纯标准库）
 
 用法:
   python gate_checks.py gate1 <project_dir>            # 校验 timeline.json（关1）
-  python gate_checks.py gate5 <project_dir>            # 校验 prompts/*.json，16 项机检
+  python gate_checks.py gate5 <project_dir>            # 校验 prompts/*.json，20 项机检
   python gate_checks.py gate6 <project_dir>            # 校验 storyboard.json 窗口与口型
 
 退出码: 0 = 全绿放行; 1 = 存在失败项（硬门禁阻断）
@@ -156,7 +156,7 @@ def check_timeline(tl: dict, lyrics_text: str, audio_duration: float = None) -> 
     return checks
 
 
-# ---------------- 关5 · 11 项机检 ----------------
+# ---------------- 关5 · 20 项机检 ----------------
 
 def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
                  shot: dict = None) -> list:
@@ -272,6 +272,26 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
         f"fields={[k for k in story_fields if story.get(k)]}")
     add(16, "故事方案指纹已锁定", bool(meta.get("story_plan_fingerprint")),
         meta.get("story_plan_fingerprint"))
+
+    # 17-20：导演方法必须可执行，不能再靠姓名与空泛“电影感”。
+    direction = pr.get("direction", {})
+    method = direction.get("method", {})
+    required_axes = ("light_contrast", "color_exposure", "lens_camera", "composition_space")
+    add(17, "导演四轴已展开", all(str(method.get(k, "")).strip() for k in required_axes),
+        f"missing={[k for k in required_axes if not method.get(k)]}")
+    director_name = style.get("director_ref", {}).get("name", "")
+    visible_prompt = " ".join(str(pr.get(k, "")) for k in
+                              ("style", "scene", "subject", "performance", "camera"))
+    add(18, "最终提示词不以导演姓名代替方法",
+        not director_name or director_name not in visible_prompt,
+        f"director={director_name}")
+    anti_ai = direction.get("anti_ai", {})
+    add(19, "去AI化包含信息层级与运动物理",
+        bool(str(anti_ai.get("clarity_budget", "")).strip()) and
+        bool(str(anti_ai.get("motion_rule", "")).strip()),
+        f"keys={sorted(anti_ai)}")
+    add(20, "切镜有因果触发", bool(str(direction.get("edit_trigger", "")).strip()),
+        direction.get("edit_trigger", ""))
 
     return checks
 

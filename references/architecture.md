@@ -48,7 +48,7 @@
   ├─ 步4: timeline 推导段长/切点 → 编剧+导演 Agent 填画面
   │        └→ state/storyboard.json【关4】
   ├─ 步5: 六段式提示词派生 → prompts/SHxxx.json
-  │        └→ gate_checks.py gate5：14 项机检 ⛔不过不提交【关5·硬】
+  │        └→ gate_checks.py gate5：20 项机检 ⛔不过不提交【关5·硬】
   ├─ 步6: 窗口核对 → gate_checks.py gate6 ⛔【关6·硬】
   ├─ 步7: 拉真实节点表体检 + 首镜试产（实测契约/分辨率/音频策略）
   ├─ 步8: 批量生成（并发/续跑/在途救回）→ clips/
