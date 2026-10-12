@@ -16,6 +16,7 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(ROOT))
 
 from scripts.gate_checks import REF_DUTIES, check_storyboard
+from scripts.chapter_plan_build import group_shots
 from scripts.render_preview import resolve_visual_asset
 
 
@@ -72,6 +73,26 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(selected, ["scene_0.png", "scene_0.png", "scene_1.png",
                                     "scene_1.png", "scene_2.png", "scene_2.png",
                                     "scene_3.png", "scene_3.png"])
+
+    def test_chapter_plan_respects_model_duration(self):
+        shots = [
+            {"id": "SH001", "window": {"start": 0.0, "end": 6.0}},
+            {"id": "SH002", "window": {"start": 6.0, "end": 13.0}},
+            {"id": "SH003", "window": {"start": 13.0, "end": 20.0}},
+        ]
+        groups = group_shots(shots, 15.0)
+        self.assertEqual([[s["id"] for s in group] for group in groups],
+                         [["SH001", "SH002"], ["SH003"]])
+
+    def test_chapter_plan_prefers_story_breaks(self):
+        shots = [
+            {"id": "SH001", "window": {"start": 0.0, "end": 4.0}},
+            {"id": "SH002", "window": {"start": 4.0, "end": 8.0}},
+            {"id": "SH003", "window": {"start": 8.0, "end": 12.0}},
+        ]
+        groups = group_shots(shots, 15.0, {"SH002"})
+        self.assertEqual([[s["id"] for s in group] for group in groups],
+                         [["SH001", "SH002"], ["SH003"]])
 
     def test_fallback_keeps_many_lyrics_inside_short_silent_audio(self):
         with tempfile.TemporaryDirectory() as tmp:

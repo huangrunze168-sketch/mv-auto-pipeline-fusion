@@ -1,9 +1,20 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## V1.3.3 · 2026-10-12 · MiniMax H3 长章节自动成片
+
+- 用 ZY Story Visual Development 的故事断点把 14 镜聚合为 4 个不超过 15 秒的章节；模型时长上限不再替代叙事边界。
+- 使用 Lovart skill + MiniMax H3 真实生成四章视频，并支持超时状态下继续查询、增量下载和旧产物去重。
+- 修复 H3 时长量化偏差：逐章经 `duration_fit.py` 回贴故事窗口。
+- 修复 H3 “768P”实际返回 1344×768、并非严格 16:9：`stitch_chapters.py` 统一中心裁切到 1280×720。
+- 拼接后重新贴回 48.849 秒母带；对齐三验 PASS。
+- 明确 H3 叙事视频与音频驱动口型的能力边界，禁止把母带对齐误报为逐字口型通过。
+
 ## V1.3.2 · 2026-10-12 · 多场景 MV 预演
 
 - 修复只声明接入 ZY Cinematic Realism、实际仍按歌词套通用动作模板的问题：新增 `story_plan.json` 契约，覆盖来源台账、叙事弧、Continuity Bible、逐镜 Scene Master 与 Shot Delta。
 - `storyboard_build.py` 缺少故事方案时明确标记 `timing_only`；`prompt_build.py` 阻断模板化降级；Gate 5/6 增加故事结构与指纹检查。
+- 新增 `chapter_plan_build.py`，按模型最大时长在歌词边界聚合故事镜头，供 MiniMax H3 等长视频模型批量生成。
+- 新增 `stitch_chapters.py`，处理 MiniMax H3 768P 实际 1344×768 的非严格 16:9 输出，中心裁切到 1280×720 后重贴母带。
 - 真实复盘确认“单张人物图全片 Ken Burns”只能算技术预览，不能称为 MV 视觉产出。
 - `render_preview.py` 优先读取 `input/scene_*.png`，按歌曲时间章节分配到不同分镜；支持逐镜 `visual_asset` 覆盖与自定义输出文件名。
 - 人物参考图仅用于生成场景关键帧时锁定 `likeness + wardrobe`，不再直接充当所有镜头。
