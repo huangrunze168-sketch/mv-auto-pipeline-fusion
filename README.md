@@ -21,8 +21,12 @@ python scripts/gate_checks.py gate5 <project_dir>
 # 4. 静帧预览成片（无视频 API 通路；歌词字幕可选）
 python scripts/render_preview.py <project_dir>
 
-# 5. 对齐三验
-python scripts/align_verify.py input/song_16k.wav state/storyboard.json state/timeline.json
+# 5. 对齐三验（建议同时传入从成片提取的候选音轨，避免把母带与自身比较）
+python scripts/align_verify.py input/song_16k.wav state/storyboard.json state/timeline.json \
+  --candidate-wav output/final_16k.wav --out output/verification_report.json
+
+# 6. 运行回归测试
+python -m unittest discover -s tests -v
 ```
 
 ## 组件

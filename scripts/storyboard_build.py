@@ -45,9 +45,22 @@ def main():
     tl = json.loads((proj / "state" / "timeline.json").read_text(encoding="utf-8"))
     dur = float(tl["duration_sec"])
     fps = a.fps
+    if fps <= 0:
+        raise ValueError("--fps 必须大于 0")
+    if dur <= 0:
+        raise ValueError("timeline.duration_sec 必须大于 0")
 
     lines = tl["lines"]
-    dur = float(tl["duration_sec"])
+    if not lines:
+        raise ValueError("timeline.lines 不能为空")
+    previous_start = -1.0
+    for ln in lines:
+        start, end = float(ln["start"]), float(ln["end"])
+        if not (0 <= start < end <= dur + 0.001):
+            raise ValueError(f"非法时间轴窗口: index={ln.get('index')} start={start} end={end}")
+        if start < previous_start:
+            raise ValueError("timeline.lines 必须按 start 单调递增")
+        previous_start = start
     # BUG-08 修法：边界数组法——每个内部边界吸附一次、两侧行共享同一值，保证首尾相接
     bounds = [0.0] + [snap(ln["start"], fps) for ln in lines[1:]] + [round(dur, 6)]
     for i, ln in enumerate(lines):
@@ -143,6 +156,7 @@ def main():
     sb = {"shots": shots, "lip_ratio_target": LIP_TARGET,
           "consecutive_lip_limit": 3, "fps": fps,
           "frame_snapped": True}
+    (proj / "state").mkdir(parents=True, exist_ok=True)
     (proj / "state" / "storyboard.json").write_text(
         json.dumps(sb, ensure_ascii=False, indent=2), encoding="utf-8")
     lip_n = sum(1 for s in shots if s["lip_sync"])

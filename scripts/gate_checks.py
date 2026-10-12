@@ -13,6 +13,7 @@ gate_checks.py — 关5/关6 硬门禁机检器（纯标准库）
 """
 import json
 import re
+import subprocess
 import sys
 import hashlib
 from pathlib import Path
@@ -44,7 +45,7 @@ def load(p: Path):
 
 # ---------------- 关1 · 时间轴机检 ----------------
 
-def check_timeline(tl: dict, lyrics_text: str) -> list:
+def check_timeline(tl: dict, lyrics_text: str, audio_duration: float = None) -> list:
     checks = []
 
     def add(name, ok, evidence=""):
@@ -55,8 +56,12 @@ def check_timeline(tl: dict, lyrics_text: str) -> list:
 
     # ① 行数与官方歌词一致（非空行）
     official_lines = [ln.strip() for ln in lyrics_text.splitlines() if ln.strip()]
-    add("歌词一行不能少", len(vocal) == len(official_lines),
-        f"timeline={len(vocal)} official={len(official_lines)}")
+    if official_lines:
+        lyrics_ok = len(vocal) == len(official_lines)
+    else:
+        lyrics_ok = tl.get("lyrics_source") == "asr_only" and bool(vocal)
+    add("歌词一行不能少", lyrics_ok,
+        f"timeline={len(vocal)} official={len(official_lines)} source={tl.get('lyrics_source')}")
 
     # ② 时间单调递增无重叠
     seq = tl.get("lines", [])
@@ -64,8 +69,12 @@ def check_timeline(tl: dict, lyrics_text: str) -> list:
            if float(b["start"]) < float(a["end"]) - 0.001]
     add("时间单调无重叠", not bad, str(bad[:3]))
 
-    # ③ 全曲时长字段有效
-    add("时长字段有效", float(tl.get("duration_sec", -1)) > 0, tl.get("duration_sec"))
+    # ③ 全曲时长必须与音频实测一致，不能只相信 JSON 自报值
+    declared_duration = float(tl.get("duration_sec", -1))
+    duration_ok = (declared_duration > 0 and audio_duration is not None and
+                   abs(declared_duration - audio_duration) < 0.1)
+    add("全曲时长与音频实测一致", duration_ok,
+        f"timeline={declared_duration} audio={audio_duration}")
 
     # ④ 间奏显式标注（至少一个 interlude，或显式声明无间奏）
     add("间奏显式标注", len(interludes) >= 1 or tl.get("no_interlude") is True,
@@ -85,7 +94,8 @@ def check_timeline(tl: dict, lyrics_text: str) -> list:
 
 # ---------------- 关5 · 11 项机检 ----------------
 
-def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool) -> list:
+def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
+                 shot: dict = None) -> list:
     meta = pr.get("meta", {})
     checks = []
 
@@ -138,7 +148,11 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool) -
         SING_MARK_RE.search(perf + audio))
 
     # 7 景别白名单
-    add(7, "口型段景别白名单", (not lip) or meta.get("shot_type") in LIPSYNC_WHITELIST,
+    shot_match = (shot is None or
+                  (meta.get("shot_type") == shot.get("shot_type") and
+                   lip == bool(shot.get("lip_sync"))))
+    add(7, "口型段景别白名单且与分镜一致",
+        ((not lip) or meta.get("shot_type") in LIPSYNC_WHITELIST) and shot_match,
         meta.get("shot_type"))
 
     # 8 禁手写秒数
@@ -146,14 +160,20 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool) -
 
     # 9 时长一致
     dur = float(meta.get("duration_sec", -1))
-    add(9, "duration_sec与窗口一致", abs(dur - wlen) < 0.05, f"meta={dur} window={wlen:.3f}")
+    shot_window = (shot or {}).get("window", {})
+    window_match = (shot is None or
+                    (abs(float(w.get("start", -1)) - float(shot_window.get("start", -2))) < 0.001 and
+                     abs(float(w.get("end", -1)) - float(shot_window.get("end", -2))) < 0.001))
+    add(9, "duration_sec与窗口一致且匹配分镜", abs(dur - wlen) < 0.05 and window_match,
+        f"meta={dur} window={wlen:.3f} storyboard_match={window_match}")
 
     # 10 窗口合法
     ok10 = 0 <= float(w.get("start", -1)) < float(w.get("end", -1)) <= song_dur + 0.05
     add(10, "窗口合法", ok10, f"{w} song={song_dur}")
 
     # 11 指纹一致
-    fp_ok = meta.get("style_fingerprint") == style.get("fingerprint")
+    expected_style_fp = style.get("fingerprint")
+    fp_ok = bool(expected_style_fp) and meta.get("style_fingerprint") == expected_style_fp
     char_ok = (meta.get("character_fingerprint") not in (None, "", "REF")) if has_protagonist else True
     add(11, "风格/人物指纹一致", fp_ok and char_ok,
         f"style_ok={fp_ok} char_ok={char_ok}")
@@ -176,7 +196,7 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool) -
 
     # 14 参考职责声明
     duties = meta.get("reference_duties", [])
-    enum_ok = all(d in REF_DUTIES for d in duties)
+    enum_ok = isinstance(duties, list) and bool(duties) and all(d in REF_DUTIES for d in duties)
     likeness_ok = (not has_protagonist) or ("likeness" in duties)
     add(14, "参考职责声明", enum_ok and likeness_ok,
         f"duties={duties} enum_ok={enum_ok} likeness_ok={likeness_ok}")
@@ -194,13 +214,19 @@ def check_storyboard(sb: dict, timeline: dict) -> list:
     def add(name, ok, evidence=""):
         checks.append({"item": name, "pass": bool(ok), "evidence": str(evidence)[:200]})
 
-    # ① 首尾相接
+    # ① 首尾相接，且真正从 0 覆盖到全曲末尾（仅检查相邻窗口会漏掉整体平移）
     gaps = []
     for a, b in zip(shots, shots[1:]):
         d = float(b["window"]["start"]) - float(a["window"]["end"])
         if abs(d) > 0.001:
             gaps.append(f"{a['id']}->{b['id']}:{d:+.3f}")
-    add("窗口首尾相接", not gaps, ";".join(gaps))
+    endpoints_ok = bool(shots)
+    if shots:
+        endpoints_ok = (abs(float(shots[0]["window"]["start"])) <= 0.001 and
+                        abs(float(shots[-1]["window"]["end"]) - song_dur) <= 0.05)
+    add("窗口首尾相接且覆盖全曲", not gaps and endpoints_ok,
+        f"gaps={';'.join(gaps)} start={shots[0]['window']['start'] if shots else None} "
+        f"end={shots[-1]['window']['end'] if shots else None} song={song_dur}")
 
     # ② 合计=全曲长
     total = sum(float(s["window"]["end"]) - float(s["window"]["start"]) for s in shots)
@@ -258,6 +284,38 @@ def check_storyboard(sb: dict, timeline: dict) -> list:
     return checks
 
 
+def probe_audio_duration(path: Path):
+    if not path.is_file():
+        return None
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True)
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def resolve_source_audio(proj: Path, timeline: dict):
+    declared = timeline.get("source_audio")
+    if declared:
+        path = Path(declared)
+        candidate = path if path.is_absolute() else proj / path
+        if candidate.is_file():
+            return candidate
+    audio_extensions = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"}
+    candidates = sorted(p for p in (proj / "input").glob("*")
+                        if p.is_file() and p.suffix.lower() in audio_extensions
+                        and "16k" not in p.stem.lower())
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def main():
     if len(sys.argv) != 3 or sys.argv[1] not in ("gate1", "gate5", "gate6"):
         print(__doc__)
@@ -271,7 +329,9 @@ def main():
     if sys.argv[1] == "gate1":
         lyrics = (proj / "input" / "lyrics.txt").read_text(encoding="utf-8") \
             if (proj / "input" / "lyrics.txt").exists() else ""
-        checks = check_timeline(timeline, lyrics)
+        audio_path = resolve_source_audio(proj, timeline)
+        checks = check_timeline(timeline, lyrics,
+                                probe_audio_duration(audio_path) if audio_path else None)
         report = {"gate": 1, "checks": checks}
         all_ok = all(c["pass"] for c in checks)
         n_pass, n_total = sum(1 for c in checks if c["pass"]), len(checks)
@@ -281,15 +341,30 @@ def main():
         sys.exit(0 if all_ok else 1)
 
     if sys.argv[1] == "gate5":
-        report = {"gate": 5, "shots": []}
+        report = {"gate": 5, "checks": [], "shots": []}
         all_ok = True
+        storyboard_path = proj / "state" / "storyboard.json"
+        storyboard = load(storyboard_path) if storyboard_path.exists() else {"shots": []}
+        shot_map = {s.get("id"): s for s in storyboard.get("shots", [])}
+        prompt_ids = []
+        file_ids = []
         for pf in sorted((proj / "prompts").glob("SH*.json")):
-            checks = check_prompt(load(pf), timeline, style, has_protagonist)
+            prompt = load(pf)
+            prompt_id = prompt.get("meta", {}).get("shot_id")
+            prompt_ids.append(prompt_id)
+            expected_id = pf.stem
+            file_ids.append(expected_id)
+            shot = shot_map.get(prompt_id)
+            checks = check_prompt(prompt, timeline, style, has_protagonist, shot)
             report["shots"].append({"file": pf.name, "checks": checks,
                                     "fingerprint": sha256_file(pf)})
             all_ok &= all(c["pass"] for c in checks)
-        if not report["shots"]:
-            all_ok = False  # 没有任何提示词 = 不可能放行
+        coverage_ok = (bool(shot_map) and len(prompt_ids) == len(set(prompt_ids)) and
+                       set(prompt_ids) == set(shot_map) and prompt_ids == file_ids)
+        report["checks"].append({"item": "提示词完整覆盖分镜且文件名一致", "pass": coverage_ok,
+                                 "evidence": f"prompts={len(prompt_ids)} shots={len(shot_map)} "
+                                             f"filenames_match={prompt_ids == file_ids}"})
+        all_ok &= coverage_ok
     else:
         sb = load(proj / "state" / "storyboard.json")
         checks = check_storyboard(sb, timeline)
@@ -300,8 +375,10 @@ def main():
         n_pass = sum(1 for c in report["checks"] if c["pass"])
         n_total = len(report["checks"])
     else:
-        n_pass = sum(1 for s in report["shots"] for c in s["checks"] if c["pass"])
-        n_total = sum(len(s["checks"]) for s in report["shots"])
+        top_checks = report.get("checks", [])
+        n_pass = (sum(1 for s in report["shots"] for c in s["checks"] if c["pass"]) +
+                  sum(1 for c in top_checks if c["pass"]))
+        n_total = sum(len(s["checks"]) for s in report["shots"]) + len(top_checks)
     report["summary"] = {"pass": all_ok, "passed": n_pass, "total": n_total}
     print(json.dumps(report, ensure_ascii=False, indent=2))
     sys.exit(0 if all_ok else 1)

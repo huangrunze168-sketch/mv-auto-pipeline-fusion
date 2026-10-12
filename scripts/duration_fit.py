@@ -14,7 +14,6 @@ stdout: {"in": ..., "target": ..., "actual": ..., "delta": ...}
 import argparse
 import json
 import math
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,6 +40,11 @@ def ffprobe_duration(path: str, fps: float = None) -> float:
 
 
 def fit(inp: str, outp: str, window: float, fps: float) -> dict:
+    if fps <= 0 or window <= 0:
+        raise ValueError("window_sec 和 --fps 必须大于 0")
+    if Path(inp).resolve() == Path(outp).resolve():
+        raise ValueError("input 与 output 不能是同一路径")
+    Path(outp).parent.mkdir(parents=True, exist_ok=True)
     # BUG-11 修法(修订)：护栏 1e-4——须大于 10 位小数存储误差(≈2.4e-9*fps)，
     # 又须远小于半帧(24fps 半帧=0.021s)，才能同时挡住噪声与保住真小数窗口
     target = math.ceil(window * fps - 1e-4) / fps
@@ -48,10 +52,16 @@ def fit(inp: str, outp: str, window: float, fps: float) -> dict:
     # BUG-13 修法：帧数已精确等于目标时直接流复制——重编码路径的 fps+tpad+-t
     # 组合会在边界帧多塞 1 帧（实测每镜 +0.042s），破坏"合计=全曲长"
     if round(actual_in * fps) == round(target * fps):
-        if Path(inp).resolve() != Path(outp).resolve():
-            shutil.copyfile(inp, outp)
+        # 即使帧数已吻合，也必须去掉输入片段可能携带的音轨；直接 copyfile 会违背
+        # “输出无音轨画面轨”的契约，并在最终母带重贴时制造双音轨。
+        r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", inp,
+                            "-map", "0:v:0", "-c:v", "copy", "-an", outp],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"ffmpeg stream copy failed: {r.stderr.strip()[-400:]}")
         return {"in": actual_in, "target": round(target, 3),
-                "actual": round(actual_in, 3), "delta": round(actual_in - window, 3),
+                "actual": round(ffprobe_duration(outp, fps), 3),
+                "delta": round(actual_in - window, 3),
                 "mode": "copy"}
     vf = f"fps={fps},tpad=stop_mode=clone:stop_duration={target + 1:.3f}"
     cmd = ["ffmpeg", "-y", "-v", "error", "-i", inp,

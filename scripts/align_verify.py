@@ -8,8 +8,10 @@ align_verify.py — 对齐三验（纯标准库，无 numpy/scipy）
 验3  口型段在窗口内能量非空（全混能量代理；接人声分离 API 后可换 stems）
 
 用法:
-  python align_verify.py <song_16k_mono.wav> <storyboard.json> <timeline.json> [--out report.json]
-输入 wav 需 16k 单声道 16bit PCM（调用前先: ffmpeg -i song.mp3 -ac 1 -ar 16000 song.wav）
+  python align_verify.py <song_16k_mono.wav> <storyboard.json> <timeline.json>
+      [--candidate-wav final_16k_mono.wav] [--out report.json]
+输入 wav 需 16k 单声道 16bit PCM（调用前先: ffmpeg -i song.mp3 -ac 1 -ar 16000 song.wav）。
+正式验收应传 --candidate-wav；省略时仅对源音频自身做链路自检。
 退出码: 0 = 三验全过；1 = 任一不过
 """
 import argparse
@@ -30,8 +32,8 @@ DUR_TOL = 0.05
 
 def load_wav(path: str):
     with wave.open(path, "rb") as w:
-        assert w.getframerate() == SR and w.getnchannels() == 1 and w.getsampwidth() == 2, \
-            "需要 16k/单声道/16bit PCM，请先用 ffmpeg 转换"
+        if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (SR, 1, 2):
+            raise ValueError("需要 16k/单声道/16bit PCM，请先用 ffmpeg 转换")
         data = w.readframes(w.getnframes())
     n = len(data) // 2
     ints = [int.from_bytes(data[2 * i:2 * i + 2], "little", signed=True) for i in range(n)]
@@ -40,11 +42,14 @@ def load_wav(path: str):
 
 def envelope(x):
     env = []
-    for i in range(0, len(x) - HOP, HOP):
+    for i in range(0, len(x), HOP):
+        chunk = x[i:i + HOP]
+        if not chunk:
+            continue
         s = 0
-        for v in x[i:i + HOP]:
+        for v in chunk:
             s += v * v
-        env.append(math.sqrt(s / HOP) / 32768.0)
+        env.append(math.sqrt(s / len(chunk)) / 32768.0)
     return env
 
 
@@ -87,37 +92,51 @@ def main():
     ap.add_argument("storyboard_json")
     ap.add_argument("timeline_json")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--candidate-wav", default=None,
+                    help="待验收成片的 16k 单声道 WAV；省略时仅做源音频自检")
     a = ap.parse_args()
 
     sb = json.loads(Path(a.storyboard_json).read_text(encoding="utf-8"))
     tl = json.loads(Path(a.timeline_json).read_text(encoding="utf-8"))
     x = load_wav(a.song_wav)
-    env = envelope(x)
+    ref_env = envelope(x)
+    candidate_x = load_wav(a.candidate_wav) if a.candidate_wav else x
+    candidate_env = envelope(candidate_x)
+    source_dur = len(x) / SR
+    candidate_dur = len(candidate_x) / SR
 
     shots = sorted(sb.get("shots", []), key=lambda s: s["window"]["start"])
 
     # 验1 时长合计
     total = sum(float(s["window"]["end"]) - float(s["window"]["start"]) for s in shots)
-    c1 = {"clips_sum": round(total, 3), "song": tl["duration_sec"],
-          "diff": round(total - tl["duration_sec"], 3),
-          "pass": abs(total - tl["duration_sec"]) < DUR_TOL}
+    timeline_dur = float(tl["duration_sec"])
+    c1 = {"clips_sum": round(total, 3), "song": round(source_dur, 3),
+          "timeline": round(timeline_dur, 3), "candidate_audio": round(candidate_dur, 3),
+          "diff": round(total - source_dur, 3),
+          "timeline_diff": round(timeline_dur - source_dur, 3),
+          "candidate_diff": round(candidate_dur - source_dur, 3),
+          "pass": (abs(total - source_dur) < DUR_TOL and
+                   abs(timeline_dur - source_dur) < DUR_TOL and
+                   abs(candidate_dur - source_dur) < DUR_TOL)}
 
     # 验2 波形滞后 + 验3 能量
     c2, c3 = [], []
     for s in shots:
         w = s["window"]
         dur = float(w["end"]) - float(w["start"])
-        ref = seg_env(env, float(w["start"]), dur)
-        c, lag = best_lag(env, ref, float(w["start"]))
+        ref = seg_env(ref_env, float(w["start"]), dur)
+        c, lag = best_lag(candidate_env, ref, float(w["start"]))
         ok2 = abs(lag) < LAG_TOL and c > CORR_MIN
         c2.append({"shot_id": s["id"], "expected_start": w["start"],
                    "best_lag": round(lag, 3), "correlation": round(c, 3), "pass": ok2})
-        e = sum(seg_env(env, float(w["start"]), dur)) / max(1, len(ref))
+        candidate_segment = seg_env(candidate_env, float(w["start"]), dur)
+        e = sum(candidate_segment) / max(1, len(candidate_segment))
         ok3 = (not s.get("lip_sync")) or e > ENERGY_MIN
         c3.append({"shot_id": s["id"], "lip_sync": bool(s.get("lip_sync")),
                    "energy": round(e, 4), "pass": ok3})
 
     report = {
+        "mode": "candidate" if a.candidate_wav else "self_reference",
         "check1_total_duration": c1,
         "check2_waveform_lag": c2,
         "check3_vocal_energy": c3,
@@ -126,6 +145,7 @@ def main():
     }
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if a.out:
+        Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         Path(a.out).write_text(text, encoding="utf-8")
     print(text)
     sys.exit(0 if report["overall"] == "PASS" else 1)

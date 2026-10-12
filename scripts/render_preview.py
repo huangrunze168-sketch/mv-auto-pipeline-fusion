@@ -27,6 +27,8 @@ PRESETS = [  # Ken Burns 预设轮转: (zoom表达式模板, x, y)
     ("1.08", "(iw-iw/zoom)*on/{D}", "(ih-ih/zoom)/2"),              # 左→右
     ("1.08", "(iw-iw/zoom)/2", "(ih-ih/zoom)*on/{D}"),              # 上→下
 ]
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 
 def run(cmd):
@@ -34,6 +36,23 @@ def run(cmd):
     if r.returncode != 0:
         raise RuntimeError(f"cmd failed ({r.returncode}):\n  CMD: {subprocess.list2cmdline(cmd)}\n"
                            f"  ERR: {r.stderr.strip()[-400:]}")
+
+
+def resolve_audio(proj: Path, timeline: dict) -> Path:
+    declared = timeline.get("source_audio")
+    if declared:
+        path = Path(declared)
+        candidate = path if path.is_absolute() else proj / path
+        if candidate.is_file():
+            return candidate
+    candidates = sorted(p for p in (proj / "input").iterdir()
+                        if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
+                        and "16k" not in p.stem.lower())
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise FileNotFoundError("input/ 中没有可用母带，且 timeline.source_audio 无效")
+    raise ValueError("input/ 中存在多个母带，请在 timeline.source_audio 中明确指定")
 
 
 def main():
@@ -45,20 +64,34 @@ def main():
     a = ap.parse_args()
     proj = Path(a.project_dir)
     sb = json.loads((proj / "state" / "storyboard.json").read_text(encoding="utf-8"))
+    timeline = json.loads((proj / "state" / "timeline.json").read_text(encoding="utf-8"))
+    shots = sb.get("shots", [])
+    if not shots:
+        raise ValueError("storyboard.shots 不能为空")
+    if a.fps <= 0 or a.width <= 0 or a.height <= 0:
+        raise ValueError("--fps/--width/--height 必须大于 0")
     # BUG-15 修法：全曲通常不是整数帧（48.848958s×24=1172.375），末镜按 ceil 会多出
     # 0.375 帧。改为末镜吸收残差：D_last = ⌊全曲×fps⌋ − Σ(前面各镜 D)，总帧数=⌊全曲×fps⌋
-    song_dur = sb["shots"][-1]["window"]["end"]
+    song_dur = shots[-1]["window"]["end"]
     total_frames = int(math.floor(song_dur * a.fps))
     Ds = [int(math.ceil((s["window"]["end"] - s["window"]["start"]) * a.fps - 1e-4))
-          for s in sb["shots"][:-1]]
-    Ds.append(max(1, total_frames - sum(Ds)))
-    img = next((proj / "input").glob("protagonist.*"))
+          for s in shots[:-1]]
+    last_frames = total_frames - sum(Ds)
+    if last_frames < 1:
+        raise ValueError("分镜窗口换算后的总帧数无效，请先重新运行 storyboard_build.py")
+    Ds.append(last_frames)
+    images = sorted(p for p in (proj / "input").iterdir()
+                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+    protagonist = sorted(p for p in images if p.stem.lower() == "protagonist")
+    img = protagonist[0] if protagonist else (images[0] if images else None)
+    audio = resolve_audio(proj, timeline)
     clips = proj / "clips"
     out_dir = proj / "output"
-    out_dir.mkdir(exist_ok=True)
+    clips.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     report = []
-    for i, s in enumerate(sb["shots"]):
+    for i, s in enumerate(shots):
         w = s["window"]
         dur = w["end"] - w["start"]
         D = Ds[i]
@@ -71,9 +104,15 @@ def main():
               f"d={D}:s={a.width}x{a.height}:fps={a.fps}")
         raw = clips / f"{s['id']}_raw.mp4"
         fit = clips / f"{s['id']}.mp4"
-        run(["ffmpeg", "-y", "-v", "error", "-loop", "1", "-i", str(img),
-             "-vf", vf, "-frames:v", str(D), "-c:v", "libx264", "-preset", "fast",
-             "-crf", "20", "-pix_fmt", "yuv420p", str(raw)])
+        if img:
+            render_cmd = ["ffmpeg", "-y", "-v", "error", "-loop", "1", "-i", str(img),
+                          "-vf", vf]
+        else:
+            # 无主角模式仍要能跑通预览链路，用中性底图代替不存在的 protagonist.*。
+            render_cmd = ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                          f"color=c=0x101018:s={a.width}x{a.height}:r={a.fps}"]
+        run(render_cmd + ["-frames:v", str(D), "-c:v", "libx264", "-preset", "fast",
+                          "-crf", "20", "-pix_fmt", "yuv420p", str(raw)])
         # 时长贴合：以帧数换算的目标秒传入（D 帧精确），窗口已帧吸附时走 copy 快路径
         r = subprocess.run([sys.executable, str(Path(__file__).parent / "duration_fit.py"),
                             str(raw), str(fit), f"{D / a.fps:.9f}", "--fps", str(a.fps)],
@@ -88,18 +127,38 @@ def main():
     # 而条目此前按 cwd 相对书写，视 cwd 偶合而偶发通过；条目与列表一律绝对路径。
     lst = clips / "concat.txt"
     lst.write_text("".join(f"file '{(clips / (s['id'] + '.mp4')).resolve()}'\n"
-                           for s in sb["shots"]), encoding="utf-8")
+                           for s in shots), encoding="utf-8")
     silent = out_dir / "mv_preview_silent.mp4"
     run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst.resolve()),
          "-c", "copy", str(silent)])
     # 母带重贴
     final = out_dir / "mv_preview.mp4"
-    run(["ffmpeg", "-y", "-v", "error", "-i", str(silent), "-i", str(proj / "input" / "song.mp3"),
+    run(["ffmpeg", "-y", "-v", "error", "-i", str(silent), "-i", str(audio),
          "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-         "-shortest", str(final)])
+         str(final)])
+
+    # 生成真实候选音轨与母带的对齐报告，而不是把母带和自己比较。
+    reference_wav = out_dir / ".verify_reference.wav"
+    candidate_wav = out_dir / ".verify_candidate.wav"
+    report_path = out_dir / "verification_report.json"
+    try:
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(audio), "-ac", "1", "-ar", "16000",
+             "-c:a", "pcm_s16le", str(reference_wav)])
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(final), "-map", "0:a:0", "-ac", "1",
+             "-ar", "16000", "-c:a", "pcm_s16le", str(candidate_wav)])
+        verify = subprocess.run(
+            [sys.executable, str(Path(__file__).parent / "align_verify.py"),
+             str(reference_wav), str(proj / "state" / "storyboard.json"),
+             str(proj / "state" / "timeline.json"), "--candidate-wav", str(candidate_wav),
+             "--out", str(report_path)], capture_output=True, text=True)
+        verification = "PASS" if verify.returncode == 0 else "FAIL"
+    finally:
+        reference_wav.unlink(missing_ok=True)
+        candidate_wav.unlink(missing_ok=True)
 
     total = sum(r["actual"] for r in report)
-    print(json.dumps({"final": str(final), "clips": len(report),
+    print(json.dumps({"final": str(final), "verification_report": str(report_path),
+                      "verification": verification, "clips": len(report),
                       "sum_actual": round(total, 3),
                       "max_delta": round(max(abs(r["delta"]) for r in report), 4)},
                      ensure_ascii=False))
