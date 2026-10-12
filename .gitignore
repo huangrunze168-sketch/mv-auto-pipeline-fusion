@@ -1,0 +1,6 @@
+# ===== 口径：只放 skill 代码，运行数据不入库 =====
+runs/
+__pycache__/
+*.pyc
+credentials.json
+*.wav
