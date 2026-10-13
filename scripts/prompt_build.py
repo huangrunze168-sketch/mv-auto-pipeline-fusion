@@ -22,7 +22,17 @@ REQUIRED_STORY_FIELDS = (
     "space", "blocking", "props", "light", "camera_witness", "shot_delta",
     "visual_center", "information_hierarchy", "gaze_target", "action_physics",
     "material_response", "edit_trigger",
+    "story_intent", "obstacle", "keyframe_moment", "audience_information",
+    "shooting_station", "frame_boundary", "visual_acceptance",
 )
+
+
+def keyframe_moment(shot: dict) -> str:
+    """明确静帧时刻优先于整段视频动作；兼容尚未提供该字段的旧项目。"""
+    moment = shot.get("keyframe_moment", shot.get("current_action"))
+    if not isinstance(moment, str) or not moment.strip():
+        raise ValueError(f"{shot.get('id')} 关键帧当前瞬间不能为空")
+    return moment
 
 
 def compile_director_method(style: dict, shot: dict) -> dict:
@@ -183,6 +193,14 @@ def main():
             "direction": {
                 "method": compile_director_method(style, shot),
                 "edit_trigger": shot["edit_trigger"],
+                "scene_master": {
+                    "story_intent": shot["story_intent"],
+                    "obstacle": shot["obstacle"],
+                    "audience_information": shot["audience_information"],
+                    "shooting_station": shot["shooting_station"],
+                    "frame_boundary": shot["frame_boundary"],
+                    "visual_acceptance": shot["visual_acceptance"],
+                },
                 "anti_ai": {
                     "clarity_budget": "仅一到两个叙事区域完整清楚，其余按距离、遮挡和实际光照自然退让",
                     "motion_rule": "身体、衣料、头发、尘沙与道具分别服从重量、惯性、阻力和接触关系",
@@ -194,9 +212,12 @@ def main():
         out.write_text(json.dumps(prompt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         (prompts_dir / "keyframes" / out.name).write_text(json.dumps({
             "shot_id": shot["id"], "scene_id": shot["scene_id"], "format": "model-neutral",
-            "scene": scene, "subject": subject, "current_moment": shot["current_action"],
+            "scene": scene, "subject": subject, "current_moment": keyframe_moment(shot),
             "camera": prompt["camera"], "visual_rules": prompt["visual_rules"],
             "direction": prompt["direction"], "aspect_ratio": style.get("aspect_ratio"),
+            "shooting_station": shot["shooting_station"],
+            "frame_boundary": shot["frame_boundary"],
+            "visual_acceptance": shot["visual_acceptance"],
             "source_prompt_sha256": sha256_file(out),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         (prompts_dir / "motion" / out.name).write_text(json.dumps({

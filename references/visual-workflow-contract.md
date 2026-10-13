@@ -1,4 +1,4 @@
-# V1.4 视觉开发执行契约
+# V1.4.1 视觉开发执行契约
 
 代码检查结构、权限、状态与版本，不代替 ZY 创作判断和实际审片。所有生成后端由用户提供；以下工具不发出生成请求。
 
@@ -73,10 +73,18 @@
 
 每镜包含 `id / scene_id / source_beat`，原有16项故事字段，以及：
 
+- `story_intent / obstacle`：当前人物目标与实际阻力，禁止用情绪形容词代替戏剧动作。
+- `keyframe_moment`：关键帧唯一当前瞬间；`current_action / motion_design` 继续描述整段视频过程，两者不得混用。
+- `audience_information`：本镜新增可见信息与保留在画外的信息。
+- `shooting_station / frame_boundary`：可画在场景平面上的摄影机站位，以及画框为何在这里截断人物、道具和空间。
+- `visual_acceptance`：回图后能直接观察的构图、动作、信息层级和物理通过条件，不写“有电影感”这类不可验收目标。
+
 - `state_before / state_after`：状态字典，下一镜前态等于上一镜后态；回忆或时间跳跃也明确追踪转换，不能因换场景而重置服装、道具和人物知识。
 - `active_rule_ids`：有 Decode Card 时选择3–5条相关规则，不贴全卡。
 - `director_decisions`：逐镜、逐激活轴给出 `instruction / reason / observable_check`。不得扩大激活轴或覆盖用户锁。
 - `motion_design`：`start_state / action / physics / camera_motion / end_state`，写清准备、接触、受力与余波；只给当前镜头可执行的主动作。
+
+可选 `coverage_plan[]` 只登记补充镜头候选：`id / purpose / keyframe_moment / selection_status`。`selection_status=selected` 时必须先给出 `materialized_shot_id`，并把它落实为 `visual_edit_plan` 中拥有独立音乐引用、景别、口型与切镜理由的正式镜头。候选不能在章节编译时临时混入口型镜头。
 
 `lyric_lines` 自动从视觉窗口与原时间轴相交计算，不手工改写。多行歌词分别成行；完整行文本是上下文，实际口型服从音频裁切窗口，不能重新唱出已切掉部分。
 
@@ -136,3 +144,5 @@ python scripts/stitch_chapters.py PROJECT
 旧项目不自动改剧情、窗口或资产。旧 storyboard 需按本契约补充 visual_edit_plan、development、state_before/after、motion_design 后重建；提示词重新过关5，图片重新核对并登记。原媒体保留。
 
 艺术创作与实际观察由 Agent/用户完成；工具不会宣称靠字段检查就获得“爆款质感”。对应回归覆盖音乐引用、跨行歌词、导演缺失/强度、连续性、资产失效、三层提示词、后端中立与素材选段。
+
+口型正式视频准备另有时间权威门禁：`timeline.production_timing_verified=true`、`pending_review=[]`，且不得带 simulation/provisional/fallback 权威标记。未满足时仍可继续故事与静态视觉开发，但 `chapter_plan_build.py` 必须阻断口型章节。

@@ -37,6 +37,15 @@ V1.4 新增问题与修复：
 
 BUG-35：合成音质明显低于用户原曲。真实项目 `source_audio=input/song_16k.wav`，使 44.1 kHz 双声道 MP3 被替换为 16 kHz 单声道分析副本后再次有损编码。修复为独立 `master_audio`、原音频流复制/无损合成；采样率、声道与音频载荷逐项验证。对齐三验不等于音质保真。
 
+## V1.4.1 真实试产新增问题
+
+- BUG-43：关键帧把“回屋、合匣、移手”等连续动作同时画进一个瞬间。根因是静帧编译直接消费 `current_action`。修复为强制 `keyframe_moment`，整段过程继续留在 `motion_design`。
+- BUG-44：逐镜虽有导演四轴，仍可能没有真实拍摄站位与取景边界，回图变成漂亮正面写真。修复为强制 `story_intent / obstacle / audience_information / shooting_station / frame_boundary / visual_acceptance`，并写入关键帧制作包和关5。
+- BUG-45：自己生成的 AI 场景图同时被当作摄影质感证据，形成自我认证。修复为资产登记只证明静态结构已观察，显式分开 `agent_inspected / user_accepted / dynamic_verified / quality_claim`。
+- BUG-46：临时 ASR 时间在全部歌词待核时仍可能继续准备正式口型章节。修复为 `production_timing_verified=true` 硬门禁；provisional、fallback、simulation 和非空 pending 均阻断。
+- BUG-47：补充的回望/手部镜没有独立时间和口型职责，可能在后端阶段临时混入。修复为 `coverage_plan` 候选制；选中后必须先物化为 visual_edit_plan 的正式镜头。
+- BUG-48：16:9 意图被误写成“生成结果必然严格 16:9”。修复为区分请求比例、后端实际返回尺寸和最终交付画布；生成器不支持精确尺寸时不得虚报，统一在交付层核验/适配。
+
 每镜必须回答以下问题，缺项即阻断编译：
 
 1. 发生前是什么状态，当前改变了什么，下一步将被什么触发；

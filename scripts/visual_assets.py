@@ -87,6 +87,9 @@ def register(project: Path, aid: str, kind: str, scene_id: str, path: Path,
     registry = load(registry_path) if registry_path.is_file() else {"assets": {}}
     record = {"kind": kind, "scene_id": scene_id, "path": str(path.resolve()),
               "sha256": fingerprint(path), "status": "approved", "review_evidence": evidence,
+              "review_scope": "static_structure", "agent_inspected": True,
+              "user_accepted": False, "dynamic_verified": False,
+              "quality_claim": "not_certified_by_registry",
               "dependencies": dependency_snapshot(project),
               "scope_sha256": scoped_snapshot(project, scene_id, aid if kind == "keyframe" else None)}
     if kind == "keyframe":

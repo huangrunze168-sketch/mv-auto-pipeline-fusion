@@ -12,6 +12,9 @@ REQUIRED_STORY_FIELDS = {
     "space", "blocking", "props", "light", "camera_witness", "shot_delta",
     "visual_center", "information_hierarchy", "gaze_target", "action_physics",
     "material_response", "edit_trigger",
+    # Scene Master V1.4.1：把静帧选择和整段运动分开，并要求可落地的拍摄依据。
+    "story_intent", "obstacle", "keyframe_moment", "audience_information",
+    "shooting_station", "frame_boundary", "visual_acceptance",
 }
 SHOT_TYPES = {"大特写", "特写", "近景", "中景", "中远景", "全景", "远景", "空镜", "背影", "群像", "细节"}
 LIP_TYPES = {"大特写", "特写", "近景", "中景"}
@@ -125,6 +128,26 @@ def apply_story_plan(project: Path, shots: list) -> tuple[str, dict, str | None]
             errors.append(f"{shot['id']} 缺少来源节拍或前后连续性状态")
         if "lyric_lines" in item and item["lyric_lines"] != shot["lyric_lines"]:
             errors.append(f"{shot['id']} 不得改写歌词引用")
+        coverage = item.get("coverage_plan", [])
+        if not isinstance(coverage, list):
+            errors.append(f"{shot['id']} coverage_plan 必须是列表")
+        else:
+            coverage_ids = [part.get("id") for part in coverage if isinstance(part, dict)]
+            if (len(coverage_ids) != len(coverage) or any(not cid for cid in coverage_ids)
+                    or len(set(coverage_ids)) != len(coverage_ids)):
+                errors.append(f"{shot['id']} coverage_plan ID 必须非空且唯一")
+            for part in coverage:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("selection_status") not in {"candidate", "selected", "rejected"}:
+                    errors.append(f"{shot['id']}/{part.get('id')} coverage selection_status 无效")
+                if not part.get("purpose") or not part.get("keyframe_moment"):
+                    errors.append(f"{shot['id']}/{part.get('id')} coverage 缺少用途或单一瞬间")
+                if (part.get("selection_status") == "selected"
+                        and not part.get("materialized_shot_id")):
+                    errors.append(
+                        f"{shot['id']}/{part.get('id')} 已选 coverage 必须先落为独立定时镜头"
+                    )
     if errors:
         raise ValueError("\n".join(errors))
     for shot in shots:
@@ -132,6 +155,7 @@ def apply_story_plan(project: Path, shots: list) -> tuple[str, dict, str | None]
         for key in REQUIRED_STORY_FIELDS | {
             "purpose", "knowledge_state", "prop_state", "source_beat",
             "state_before", "state_after", "active_rule_ids", "director_decisions", "motion_design", "risk_tags",
+            "decision_authority", "design_revision", "coverage_plan",
         }:
             if key in item:
                 shot[key] = item[key]

@@ -1,6 +1,6 @@
 # ZY Cinematic Realism → MV 提示词构造适配
 
-V1.4 执行顺序和数据契约见 `visual-workflow-contract.md`：故事、参考视觉、导演/摄影三链协同，不再把导演方法局限为 style 词汇或把歌词窗口等同视觉镜头。
+V1.4.1 执行顺序和数据契约见 `visual-workflow-contract.md`，导演级逐镜写法见 `director-scene-master.md`：故事、参考视觉、导演/摄影三链协同，不再把导演方法局限为 style 词汇或把歌词窗口等同视觉镜头。
 
 > 上游：[`popopo-99/zy-cinematic-realism`](https://github.com/popopo-99/zy-cinematic-realism)，内置版本 v2.5.0（提交 `9a3b36d1fb6a980ae9e21f74c86dd56bae443a4d`）。上游负责“画面是什么、如何被观看”；MV 流水线负责“画面何时发生、是否对口型、唱哪句、持续多久”。
 
@@ -44,6 +44,8 @@ Story Visual Development 编写 `state/story_plan.json`，再运行一次 `story
 - `space`、`blocking`、`props`、`light`、`camera_witness`
 - `visual_center`、`information_hierarchy`、`gaze_target`
 - `action_physics`、`material_response`、`edit_trigger`
+- `story_intent`、`obstacle`、`keyframe_moment`、`audience_information`
+- `shooting_station`、`frame_boundary`、`visual_acceptance`
 - `shot_delta`
 - `state_before / state_after`、`motion_design`、按需选择的 `active_rule_ids / director_decisions`
 

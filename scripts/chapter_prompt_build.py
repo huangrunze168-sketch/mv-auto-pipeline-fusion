@@ -44,12 +44,19 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
         meta = shot["meta"]
         direction = shot.get("direction", {})
         method = direction.get("method", {})
+        scene_master = direction.get("scene_master", {})
         missing_axes = [key for key in (
             "light_contrast", "color_exposure", "lens_camera", "composition_space"
         ) if not str(method.get(key, "")).strip()]
-        if missing_axes or not str(direction.get("edit_trigger", "")).strip():
+        missing_scene_master = [key for key in (
+            "story_intent", "obstacle", "audience_information",
+            "shooting_station", "frame_boundary", "visual_acceptance",
+        ) if not str(scene_master.get(key, "")).strip()]
+        if (missing_axes or missing_scene_master
+                or not str(direction.get("edit_trigger", "")).strip()):
             raise ValueError(
                 f"{meta.get('shot_id')} 未通过导演编译：missing_axes={missing_axes} "
+                f"missing_scene_master={missing_scene_master} "
                 f"edit_trigger={bool(direction.get('edit_trigger'))}"
             )
         lip = bool(meta.get("lip_sync"))
@@ -62,6 +69,7 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
             "character_and_wardrobe": shot.get("subject", ""),
             "camera_witness": shot["camera"],
             "director_axes": method,
+            "scene_master": scene_master,
             "motion_physics": direction.get("anti_ai", {}).get("motion_rule", ""),
             "performance_audio_intent": (
                 f"需要演唱口型；完整行歌词仅作上下文：{meta.get('lyric_text', '')}；实际口型服从本镜音频窗口，禁止重唱被裁掉的部分" if lip
@@ -99,6 +107,10 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
             f"- 空间：{beat['space_and_blocking']}",
             f"- 人物与服装锁：{beat['character_and_wardrobe']}",
             f"- 观看：{beat['camera_witness']}",
+            f"- 意图与阻力：{beat['scene_master']['story_intent']}；{beat['scene_master']['obstacle']}",
+            f"- 观众信息：{beat['scene_master']['audience_information']}",
+            f"- 实际机位与画框：{beat['scene_master']['shooting_station']}；{beat['scene_master']['frame_boundary']}",
+            f"- 可观察验收：{beat['scene_master']['visual_acceptance']}",
             "- 导演四轴：" + "；".join(
                 str(beat["director_axes"].get(key, "")) for key in
                 ("light_contrast", "color_exposure", "lens_camera", "composition_space")

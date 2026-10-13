@@ -6,11 +6,11 @@ description: >
   触发词：做 MV、音乐视频、口型对齐、MV 流水线、给这首歌出画面。
 ---
 
-# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.4.0）
+# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.4.1）
 
 > 一句话需求：**给一首歌和一张图，出来一支完整的、口型对得上的音乐 MV。**
 > 技术基线：全 API（无需 GPU）· 运行形态：Agent Skill。
-> V1.4.0：ZY 故事、参考视觉、导演/摄影方法三链协同；音乐窗口与视觉分镜分离；场景母版 → 分镜关键帧 → 动作制作包 → 素材选段 → 段落审片。原始母带保持独立，生成后端由用户选择。
+> V1.4.1：在完整 ZY 链路上新增导演级 Scene Master 硬契约，分离静帧瞬间与视频动作，阻断临时时间轴进入正式口型章节，并明确静态审查不等于艺术质量或用户接受。原始母带保持独立，生成后端由用户选择。
 
 ## 输入 / 输出
 
@@ -58,7 +58,7 @@ project/
 | 1 | 歌词提取与强制对齐：ASR API 只给时间，文本用官方歌词校正 → timeline.json（权威时间基准诞生地） | 关 1 | |
 | 2 | 音乐结构、全片导演提案与视觉目标；风格先于场景资产，但人物图服装锁优先于系统风格补全 | 关 2 | |
 | 3 | Reference Roles 与人物锁；需要参考视觉分析时调用 Medium Router / Dream Decode，记录实际观察范围 | 关 3 | |
-| 4 | Story Visual Development + Source Ledger + 导演路由 + Continuity Bible；用音乐引用设计 visual_edit_plan，再合并 story_plan | 关 4 | |
+| 4 | Story Visual Development + Source Ledger + 导演路由 + Continuity Bible；逐镜写意图/阻力/单一瞬间/观众信息/真实机位/画框边界/观察验收，再用音乐引用设计 visual_edit_plan | 关 4 | |
 | 5 | ZY 契约检查；分开编译场景母版、分镜关键帧与视频运动提示词；20 项逐镜检查及来源/依赖检查全过 | 关 5 | ⛔ 硬 |
 | 6 | 音乐窗口与口型核对：窗口首尾相接、合计=全曲长、口型与景别一致，**任何环节不许手写秒数** | 关 6 | ⛔ 硬 |
 | 7 | 场景母版候选比较、Remix 单轴变体与关键帧审查；资产批准后，用户所选后端按真实契约生成代表样片并完成动态/段落审片 | | |
@@ -91,12 +91,14 @@ project/
 - **降级对齐**（`scripts/timeline_fallback.py`）：无 ASR key 时按能量起点 + 均匀分布生成试跑时间轴，全行 pending_review 待用户点头；**不可用于口型正式成片**。
 - **分镜构建**（`scripts/storyboard_build.py`）：visual_edit_plan 使用音乐引用安排任意数量镜头，窗口吸附到帧网格，自动记录覆盖的歌词行。无视觉编辑方案时只输出空镜头时间骨架，不分配景别/口型或编造剧情。
 - **故事编译**（`scripts/prompt_build.py`）：强制要求 `story_mode=zy_story_visual_development`，从因果链、连续性与 Shot Delta 构造提示词，不再使用歌词动作模板。
+- **导演级 Scene Master**（`references/director-scene-master.md`）：`current_action/motion_design` 负责时间过程，`keyframe_moment` 负责单一静帧；真实机位、画框边界和可观察验收必须随镜头进入制作包。覆盖镜选中后必须先落为独立定时镜头。
 - **多场景预览成片**（`scripts/render_preview.py`）：优先把 `input/scene_*.png` 按歌曲章节分配给各镜；只有没有场景关键帧时才回退人物图。静帧仍只验证剪辑结构，口型与真实运动需走视频 API。
 - **时长贴合**（`scripts/duration_fit.py`）：帧网格对齐（护栏 1e-4），帧数已合时流复制跳过重编码；计量用 nb_frames/fps，不信容器时长。
 - **对齐三验**（`scripts/align_verify.py`）：包络 + 局部搜索，纯标准库：① 各段时长合计 = 原曲长 ② 逐段波形最优滞后 ≈ 0 且相关度达标 ③ 对口型段人声能量非空。
 - **成本台账**（`scripts/ledger.py`）：币与真钱分列，调度动作全留痕；总览三数——成片多少秒、机器跑了多久、花了多少。
 - **电影化提示词构造**（`references/zy-cinematic-integration.md`）：使用 `vendor/zy-cinematic-realism/` 的 Scene Master、Creative Grammar、连续性与局部修复方法；只负责视觉构造，不得改写 timeline 窗口、歌词、口型、音频策略或后端契约。
 - **长视频章节**（`scripts/chapter_plan_build.py`）：模型最大时长是硬上限，ZY 故事断点优先；每章继续携带 Continuity Bible 与逐镜 Shot Deltas。
+- **正式口型时间门禁**：临时、fallback、simulation 或仍有 `pending_review` 的时间轴可以继续视觉开发，但口型章节准备要求显式 `production_timing_verified=true`。
 - **章节音频资产**（`scripts/chapter_audio_build.py`）：只按章节窗口裁出 WAV 并记录来源与 SHA-256；不假设后端支持音频，也不发明音频参数名。用户选定后端后由外部适配层决定是否以及如何绑定。
 - **模型中立章节包**（`scripts/chapter_prompt_build.py`）：禁止把逐镜 Scene Master 压成剧情摘要。按时间轴保留故事变化、演员动作、空间调度、物理机位、声画意图和切镜理由，但不写任何平台、模型、模式或 API 字段。
 - **样片优先与段落审片**（`scripts/director_review_gate.py`）：选择有代表性与生成难点的一章；记录九项动态维度，以及音乐节奏、情绪推进、切镜关系、视觉语法四项段落证据。审片绑定样片与制作依赖指纹，上游变化需复核；新难点另做针对性检查，单章通过不等于全片通过。
@@ -113,6 +115,7 @@ project/
 ## 详细规格（references/）
 
 - `references/visual-workflow-contract.md` — V1.4 数据、执行顺序、迁移与命令
+- `references/director-scene-master.md` — 真实导演拍摄感的 Scene Master、覆盖镜与验收边界
 - `references/mv-visual-development-plan.md` — 深度视觉开发设计依据
 
 ## ZY 分支调用顺序

@@ -26,7 +26,8 @@ def write(path, value):
 
 
 def fixture(project):
-    timeline = {"duration_sec": 4.0, "source_audio": "input/song.wav", "lines": [
+    timeline = {"duration_sec": 4.0, "source_audio": "input/song.wav",
+                "production_timing_verified": True, "pending_review": [], "lines": [
         {"index": 1, "type": "vocal", "text": "第一句", "start": 0.0, "end": 3.0},
         {"index": 2, "type": "vocal", "text": "第二句", "start": 3.0, "end": 4.0},
     ]}
@@ -146,6 +147,26 @@ class VisualWorkflowTests(unittest.TestCase):
             music["cues"][0]["time_sec"] = 0.001
             with self.assertRaises(ValueError):
                 build_visual_shots(tl, music, edit, 24)
+
+    def test_selected_coverage_requires_an_independent_timed_shot(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            fixture(project)
+            plan_path = project / "state/story_plan.json"
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan["shots"][0]["coverage_plan"] = [{
+                "id": "SH001_INSERT_A", "purpose": "保留人物犹豫时的手部证据",
+                "keyframe_moment": "指尖停在信封折角", "selection_status": "selected",
+            }]
+            write(plan_path, plan)
+            with self.assertRaisesRegex(ValueError, "独立定时镜头"):
+                build(project)
+
+            plan["shots"][0]["coverage_plan"][0]["selection_status"] = "candidate"
+            write(plan_path, plan)
+            result = build(project)
+            self.assertEqual(result["shots"][0]["coverage_plan"][0]["selection_status"],
+                             "candidate")
 
     def test_no_edit_plan_produces_skeleton_without_fake_lipsync(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:

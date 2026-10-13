@@ -2,7 +2,7 @@
 
 > 所有状态文件 JSON，UTF-8，字段名英文（铁律 C 语言分层）。时间单位一律秒（float），禁止字符串时间码进状态层。
 
-V1.4 以 `visual-workflow-contract.md` 为新增视觉开发/资产/剪辑数据契约。下面的旧示例仅说明通用字段；新项目使用 schema_version=2、timing_mode=music_referenced_visual_edit、timing_refs、lyric_lines、scene_id 与显式 performance_policy。
+V1.4.1 以 `visual-workflow-contract.md` 和 `director-scene-master.md` 为新增视觉开发/资产/剪辑数据契约。下面的旧示例仅说明通用字段；新项目使用 schema_version=2、timing_mode=music_referenced_visual_edit、timing_refs、lyric_lines、scene_id 与显式 performance_policy。
 
 ## 1. state/timeline.json —— 权威时间基准（关 1 产物）
 
@@ -38,9 +38,12 @@ V1.4 以 `visual-workflow-contract.md` 为新增视觉开发/资产/剪辑数据
     { "id": "S01", "role": "verse", "line_indexes": [1, 2], "start": 12.40, "end": 45.10 }
   ],
   "lyrics_source": "official",     // official | asr_only
-  "pending_review": []             // 待核行：confidence < 0.85 的行，需用户点头
+  "pending_review": [],            // 待核行：confidence < 0.85 的行，需用户点头
+  "production_timing_verified": true // 只有权威对齐并完成人工待核后才能设为 true；正式口型章节硬门禁
 }
 ```
+
+`source_audio` 可以是分析副本，`master_audio` 才是交付母带。`simulation_only=true`、`authority` 含 provisional/pending/diagnostic/fallback、`pending_review` 非空，或缺少 `production_timing_verified=true` 时，仍可做视觉开发，但不得准备正式口型章节。
 
 导出规则：`.lrc` 由 lines 生成，`[mm:ss.xx]text`；interlude 行不写文本。
 
@@ -105,6 +108,10 @@ V1.4 以 `visual-workflow-contract.md` 为新增视觉开发/资产/剪辑数据
   "performance_policy": {}         // 比例与连续上限仅在项目明确指定时启用
 }
 ```
+
+V1.4.1 的 `story_plan.shots[]` 还必须提供 `story_intent / obstacle / keyframe_moment / audience_information / shooting_station / frame_boundary / visual_acceptance`。静帧只消费 `keyframe_moment`；整段运动留在 `current_action / motion_design`。详见 `director-scene-master.md`。
+
+`visual_assets.json` 中的 `status=approved` 仅表示带证据的静态结构登记；V1.4.1 同时记录 `review_scope=static_structure / agent_inspected / user_accepted / dynamic_verified / quality_claim`，避免把登记误读为用户接受或动态艺术验收。
 
 ## 4. prompts/SHxxx.json —— 六段式提示词（关 5 校验对象）
 

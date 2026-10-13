@@ -307,10 +307,22 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
         not director_name or director_name not in visible_prompt,
         f"director={director_name}")
     anti_ai = direction.get("anti_ai", {})
-    add(19, "去AI化包含信息层级与运动物理",
+    scene_master = direction.get("scene_master", {})
+    required_scene_master = (
+        "story_intent", "obstacle", "audience_information",
+        "shooting_station", "frame_boundary", "visual_acceptance",
+    )
+    scene_master_ok = all(str(scene_master.get(key, "")).strip()
+                          for key in required_scene_master)
+    if shot is not None:
+        scene_master_ok = scene_master_ok and all(
+            scene_master.get(key) == shot.get(key) for key in required_scene_master
+        )
+    add(19, "导演级Scene Master与去AI化约束完整",
+        scene_master_ok and
         bool(str(anti_ai.get("clarity_budget", "")).strip()) and
         bool(str(anti_ai.get("motion_rule", "")).strip()),
-        f"keys={sorted(anti_ai)}")
+        f"scene_master={sorted(scene_master)} anti_ai={sorted(anti_ai)}")
     add(20, "切镜有因果触发", bool(str(direction.get("edit_trigger", "")).strip()),
         direction.get("edit_trigger", ""))
 

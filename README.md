@@ -8,7 +8,7 @@
 
 主定义与完整流程见 [SKILL.md](SKILL.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
-V1.4 的数据填写、完整执行顺序与旧项目迁移见 [视觉开发执行契约](references/visual-workflow-contract.md)。先完成 ZY 的故事、导演、参考视觉和连续性记录，再生成场景母版、关键帧与视频；后端由用户选择。
+V1.4.1 的数据填写、完整执行顺序与旧项目迁移见 [视觉开发执行契约](references/visual-workflow-contract.md)。逐镜导演构造见 [导演级 Scene Master 契约](references/director-scene-master.md)。先完成 ZY 的故事、导演、参考视觉和连续性记录，再生成场景母版、关键帧与视频；后端由用户选择。
 
 ```bash
 # 1. 降级对齐（无 ASR key 的试跑时间轴；正式口型成片需接 ASR 通路）

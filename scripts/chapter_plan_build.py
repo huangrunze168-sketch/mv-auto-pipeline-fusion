@@ -62,6 +62,24 @@ def select_prototype(chapters: list[dict]) -> str:
     return ranked[0]["id"]
 
 
+def require_production_timing(timeline: dict, shots: list[dict]) -> None:
+    """临时/待核时间轴可做视觉设计，但不得进入正式口型视频准备。"""
+    if not any(bool(shot.get("lip_sync")) for shot in shots):
+        return
+    authority = str(timeline.get("authority", "")).lower()
+    problems = []
+    if timeline.get("production_timing_verified") is not True:
+        problems.append("production_timing_verified 不是 true")
+    if timeline.get("pending_review"):
+        problems.append("仍有 pending_review 歌词行")
+    if timeline.get("simulation_only") is True:
+        problems.append("timeline 标记为 simulation_only")
+    if any(word in authority for word in ("provisional", "pending", "diagnostic", "fallback")):
+        problems.append(f"authority={timeline.get('authority')}")
+    if problems:
+        raise ValueError("口型章节禁止使用临时或待核时间轴: " + "; ".join(problems))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project_dir")
@@ -72,6 +90,7 @@ def main():
     storyboard = load(project / "state" / "storyboard.json")
     story_plan = load(project / "state" / "story_plan.json")
     style = load(project / "state" / "style.json")
+    timeline = load(project / "state" / "timeline.json")
     aspect_ratio = str(style.get("aspect_ratio", "")).strip()
     if not aspect_ratio:
         raise ValueError("style.aspect_ratio 不能为空")
@@ -81,6 +100,7 @@ def main():
     shots = storyboard.get("shots", [])
     if not shots:
         raise ValueError("storyboard.shots 不能为空")
+    require_production_timing(timeline, shots)
     chapter_break_after = set(story_plan.get("chapter_break_after", []))
     chapter_break_after.update(a["id"] for a, b in zip(shots, shots[1:])
                                if a.get("scene_id") != b.get("scene_id"))

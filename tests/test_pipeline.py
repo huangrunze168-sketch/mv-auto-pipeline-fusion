@@ -16,11 +16,12 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(ROOT))
 
 from scripts.gate_checks import REF_DUTIES, check_storyboard
-from scripts.chapter_plan_build import group_shots, select_prototype
+from scripts.chapter_plan_build import group_shots, select_prototype, require_production_timing
 from scripts.chapter_audio_build import build_audio_segments
 from scripts.director_review_gate import DIMENSIONS, initial_review, validate_review
 from scripts.chapter_prompt_build import build as build_chapter_prompts, compile_chapter
-from scripts.prompt_build import compile_director_method
+from scripts.prompt_build import compile_director_method, keyframe_moment
+from scripts.storyboard_build import apply_story_plan, REQUIRED_STORY_FIELDS
 from scripts.render_preview import resolve_visual_asset
 from scripts.audio_master import resolve_master, master_encoding_args, probe_audio
 
@@ -45,6 +46,59 @@ def write_wav(path: Path, duration: float, silence: bool = False) -> None:
 
 
 class PipelineTests(unittest.TestCase):
+    def test_storyboard_preserves_keyframe_moment_and_shooting_design(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            (project / "state").mkdir()
+            item = {key: "本镜设计" for key in REQUIRED_STORY_FIELDS}
+            item.update(id="SH001", scene_id="room", source_beat="P1",
+                        state_before={"hand": "on_paper"}, state_after={"hand": "free"},
+                        keyframe_moment="指腹压住回翘折角", shooting_station="C1",
+                        visual_acceptance="脸在画外", audience_information="重复动作无效",
+                        design_revision="r2", decision_authority={"USER-LOCKED": ["16:9"]})
+            (project / "state/story_plan.json").write_text(json.dumps({
+                "method": "zy_story_visual_development", "shots": [item],
+            }, ensure_ascii=False), encoding="utf-8")
+            shots = [{"id": "SH001", "scene_id": "room"}]
+            apply_story_plan(project, shots)
+            for key in ("keyframe_moment", "shooting_station", "visual_acceptance",
+                        "audience_information", "design_revision", "decision_authority"):
+                self.assertEqual(shots[0][key], item[key])
+            self.assertEqual(keyframe_moment(shots[0]), "指腹压住回翘折角")
+
+    def test_keyframe_moment_does_not_stack_video_actions(self):
+        shot = {"id": "SH006", "current_action": "回屋、合匣、移手",
+                "keyframe_moment": "匣已合上，右指尖仍接触盖面"}
+        self.assertEqual(keyframe_moment(shot), shot["keyframe_moment"])
+        self.assertEqual(shot["current_action"], "回屋、合匣、移手")
+
+    def test_keyframe_moment_legacy_fallback(self):
+        self.assertEqual(keyframe_moment({"current_action": "手压折角"}), "手压折角")
+
+    def test_keyframe_moment_rejects_explicit_empty_value(self):
+        for value in ("", "  ", None, []):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                keyframe_moment({"current_action": "完整动作", "keyframe_moment": value})
+
+    def test_lipsync_chapter_rejects_provisional_timing(self):
+        shots = [{"id": "SH001", "lip_sync": True}]
+        provisional = {
+            "production_timing_verified": False,
+            "simulation_only": True,
+            "authority": "provisional_not_for_final_lipsync",
+            "pending_review": [1],
+        }
+        with self.assertRaisesRegex(ValueError, "临时或待核时间轴"):
+            require_production_timing(provisional, shots)
+        verified = {"production_timing_verified": True, "pending_review": []}
+        require_production_timing(verified, shots)
+
+    def test_narrative_chapter_can_use_provisional_timing_without_lipsync_claim(self):
+        require_production_timing(
+            {"simulation_only": True, "pending_review": [1]},
+            [{"id": "SH001", "lip_sync": False}],
+        )
+
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "需要 ffmpeg")
     def test_analysis_copy_cannot_silently_replace_master(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
@@ -230,11 +284,19 @@ class PipelineTests(unittest.TestCase):
             "story": {"before": "门关", "next": "人离开", "shot_delta": "门开"},
             "performance": "人物推门", "scene": "门内", "camera": "固定机位",
             "direction": {"method": axes, "edit_trigger": "门碰墙时切",
+                          "scene_master": {
+                              "story_intent": "离开", "obstacle": "门未开",
+                              "audience_information": "她已决定离开",
+                              "shooting_station": "门柱内侧腰高",
+                              "frame_boundary": "门柱截住左侧空间",
+                              "visual_acceptance": "先读推门的手，再读门外道路",
+                          },
                           "anti_ai": {"motion_rule": "手接触门后门才转动"}},
         }}
         compiled = compile_chapter(chapter, prompt_map, "16:9")
         self.assertIn("门外冷光，屋内暗部保留", compiled["prompt"])
         self.assertIn("秩序中一次偏离", compiled["prompt"])
+        self.assertIn("门柱内侧腰高", compiled["prompt"])
 
     def test_chapter_manifest_blocks_submission_until_user_selects_backend(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
