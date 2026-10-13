@@ -1,0 +1,132 @@
+"""场景母版和分镜关键帧的依赖登记与过期检查，不提交任何生成任务。"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+try:
+    from .visual_development import fingerprint, load
+except ImportError:
+    from visual_development import fingerprint, load
+
+
+def dependency_snapshot(project: Path) -> dict:
+    names = ("style.json", "timeline.json", "music_structure.json")
+    snapshot = {"state/" + name: fingerprint(project / "state" / name)
+                for name in names if (project / "state" / name).is_file()}
+    for path in (project / "input").glob("protagonist.*"):
+        snapshot[path.relative_to(project).as_posix()] = fingerprint(path)
+    return snapshot
+
+
+def scoped_snapshot(project: Path, scene_id: str, shot_id: str | None) -> str:
+    development = load(project / "state" / "development.json")
+    storyboard = load(project / "state" / "storyboard.json")
+    scene = next((s for s in development["scenes"] if s["id"] == scene_id), None)
+    shot = next((s for s in storyboard["shots"] if s["id"] == shot_id), None) if shot_id else None
+    if shot:
+        shot = {k: v for k, v in shot.items() if k not in {"prompt_fingerprint", "status", "repair"}}
+    relevant_beats = {scene.get("source_beat") if scene else None, shot.get("source_beat") if shot else None}
+    value = {"scene": scene, "shot": shot, "treatment": development.get("treatment"),
+             "director": development.get("director"), "references": development.get("references"),
+             "visual_rules": development.get("visual_rules"),
+             "ledger": [e for e in development.get("source_ledger", []) if e["id"] in relevant_beats],
+             "continuity": storyboard.get("continuity_bible")}
+    return "sha256:" + hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def asset_errors(project: Path, asset: dict, assets: dict) -> list:
+    errors = []
+    path = project / asset.get("path", "")
+    if not path.is_file() or fingerprint(path) != asset.get("sha256"):
+        errors.append("资产不存在或内容指纹已改变")
+    if asset.get("status") != "approved" or not asset.get("review_evidence"):
+        errors.append("资产未经过实际观察批准")
+    for name, expected in asset.get("dependencies", {}).items():
+        dep = project / name
+        if not dep.is_file() or fingerprint(dep) != expected:
+            errors.append(f"依赖过期: {name}")
+    if not asset.get("dependencies"):
+        errors.append("缺少依赖指纹")
+    if scoped_snapshot(project, asset["scene_id"], asset.get("shot_id")) != asset.get("scope_sha256"):
+        errors.append("场景或镜头的设计依赖已变化")
+    parent_id = asset.get("parent_asset")
+    if parent_id:
+        parent = assets.get(parent_id)
+        if not parent or parent.get("sha256") != asset.get("parent_sha256"):
+            errors.append("母版版本已改变")
+        elif parent.get("parent_asset"):
+            errors.append("关键帧只能引用场景母版，禁止循环父依赖")
+        else:
+            errors.extend("母版: " + e for e in asset_errors(project, parent, {}))
+    return errors
+
+
+def require_keyframe(project: Path, shot: dict, registry: dict) -> dict:
+    assets = registry.get("assets", {})
+    frame = assets.get(shot["id"])
+    if not frame or frame.get("kind") != "keyframe" or frame.get("scene_id") != shot["scene_id"]:
+        raise ValueError(f"{shot['id']} 缺少同场景分镜关键帧")
+    parent = assets.get(frame.get("parent_asset"), {})
+    if parent.get("kind") != "scene_master" or parent.get("scene_id") != shot["scene_id"]:
+        raise ValueError(f"{shot['id']} 关键帧母版引用无效")
+    errors = asset_errors(project, frame, assets)
+    if errors:
+        raise ValueError(f"{shot['id']} 资产需复核: " + "; ".join(errors))
+    return frame
+
+
+def register(project: Path, aid: str, kind: str, scene_id: str, path: Path,
+             evidence: str, parent_id: str | None = None) -> dict:
+    if not evidence.strip() or not path.is_file():
+        raise ValueError("登记批准资产必须提供实际审查证据与存在的文件")
+    development = load(project / "state" / "development.json")
+    if scene_id not in {s["id"] for s in development["scenes"]}:
+        raise ValueError("场景不存在")
+    registry_path = project / "state" / "visual_assets.json"
+    registry = load(registry_path) if registry_path.is_file() else {"assets": {}}
+    record = {"kind": kind, "scene_id": scene_id, "path": str(path.resolve()),
+              "sha256": fingerprint(path), "status": "approved", "review_evidence": evidence,
+              "dependencies": dependency_snapshot(project),
+              "scope_sha256": scoped_snapshot(project, scene_id, aid if kind == "keyframe" else None)}
+    if kind == "keyframe":
+        storyboard = load(project / "state" / "storyboard.json")
+        shot = next((s for s in storyboard["shots"] if s["id"] == aid), None)
+        if not shot or shot["scene_id"] != scene_id:
+            raise ValueError("关键帧必须匹配 storyboard 镜头及场景")
+        parent = registry["assets"].get(parent_id, {})
+        if parent.get("kind") != "scene_master" or parent.get("scene_id") != scene_id:
+            raise ValueError("关键帧须引用同场景母版")
+        errors = asset_errors(project, parent, registry["assets"])
+        if errors:
+            raise ValueError("母版需复核: " + "; ".join(errors))
+        record.update(parent_asset=parent_id, parent_sha256=parent["sha256"], shot_id=aid)
+    registry["assets"][aid] = record
+    registry_path.write_text(json.dumps(registry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return record
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("action", choices=("register", "check"))
+    parser.add_argument("project_dir")
+    parser.add_argument("--id")
+    parser.add_argument("--kind", choices=("scene_master", "keyframe"))
+    parser.add_argument("--scene")
+    parser.add_argument("--path")
+    parser.add_argument("--evidence")
+    parser.add_argument("--parent")
+    args = parser.parse_args()
+    project = Path(args.project_dir).resolve()
+    if args.action == "register":
+        if not all((args.id, args.kind, args.scene, args.path, args.evidence)):
+            parser.error("register 需要 --id --kind --scene --path --evidence")
+        result = register(project, args.id, args.kind, args.scene, Path(args.path), args.evidence, args.parent)
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        registry = load(project / "state" / "visual_assets.json")
+        errors = {key: asset_errors(project, value, registry["assets"])
+                  for key, value in registry["assets"].items()}
+        failures = {key: value for key, value in errors.items() if value}
+        print(json.dumps({"status": "needs_review" if failures else "current", "errors": failures}, ensure_ascii=False))
+        raise SystemExit(1 if failures else 0)

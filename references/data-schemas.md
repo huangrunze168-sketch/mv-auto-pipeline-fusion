@@ -2,6 +2,8 @@
 
 > 所有状态文件 JSON，UTF-8，字段名英文（铁律 C 语言分层）。时间单位一律秒（float），禁止字符串时间码进状态层。
 
+V1.4 以 `visual-workflow-contract.md` 为新增视觉开发/资产/剪辑数据契约。下面的旧示例仅说明通用字段；新项目使用 schema_version=2、timing_mode=music_referenced_visual_edit、timing_refs、lyric_lines、scene_id 与显式 performance_policy。
+
 ## 1. state/timeline.json —— 权威时间基准（关 1 产物）
 
 ```json
@@ -84,7 +86,7 @@
       "id": "SH001",
       "segment": "S01",
       "lyric_line": 1,             // 对应 timeline.lines.index；间奏镜可为 null
-      "window": { "start": 12.40, "end": 16.08 },  // 切点只落在歌词行尾/间奏边界
+      "window": { "start": 12.40, "end": 16.08 },  // 从歌词边界或有证据的音乐切点引用推导
       "shot_type": "特写",          // 大特写|特写|近景|中景|中远景|全景|远景|空镜|背影|群像
       "lip_sync": true,            // 只有前四类允许 true（铁律 B）
       "role": "perform",           // perform | narrative | insert
@@ -100,8 +102,7 @@
       "status": "pending"          // pending|generated|fitted|verified|failed
     }
   ],
-  "lip_ratio_target": 0.45,
-  "consecutive_lip_limit": 3
+  "performance_policy": {}         // 比例与连续上限仅在项目明确指定时启用
 }
 ```
 

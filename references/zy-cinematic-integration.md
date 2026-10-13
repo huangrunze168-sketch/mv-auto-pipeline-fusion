@@ -1,5 +1,7 @@
 # ZY Cinematic Realism → MV 提示词构造适配
 
+V1.4 执行顺序和数据契约见 `visual-workflow-contract.md`：故事、参考视觉、导演/摄影三链协同，不再把导演方法局限为 style 词汇或把歌词窗口等同视觉镜头。
+
 > 上游：[`popopo-99/zy-cinematic-realism`](https://github.com/popopo-99/zy-cinematic-realism)，内置版本 v2.5.0（提交 `9a3b36d1fb6a980ae9e21f74c86dd56bae443a4d`）。上游负责“画面是什么、如何被观看”；MV 流水线负责“画面何时发生、是否对口型、唱哪句、持续多久”。
 
 ## 一、职责边界
@@ -32,17 +34,18 @@
 
 ### `state/story_plan.json` 最小契约
 
-`storyboard_build.py` 第一次运行只确定时间窗、歌词行、口型、景别和生成职责，不选择后端。Agent 必须按上游
+`storyboard_build.py` 无 visual_edit_plan 时只交付时间骨架，不确定景别、口型或后端。Agent 必须按上游
 Story Visual Development 编写 `state/story_plan.json`，再运行一次 `storyboard_build.py` 合并。
 文件必须声明 `method: "zy_story_visual_development"`，包含 `continuity_bible`，且 `shots`
 必须与时间分镜镜头 ID 完整一致。每镜至少包含：
 
-- `id`、`lyric_line`
+- `id`、`scene_id`、`source_beat`；`lyric_lines` 由时间轴相交关系推导
 - `story_beat`、`narrative_before`、`current_action`、`implied_next`
 - `space`、`blocking`、`props`、`light`、`camera_witness`
 - `visual_center`、`information_hierarchy`、`gaze_target`
 - `action_physics`、`material_response`、`edit_trigger`
 - `shot_delta`
+- `state_before / state_after`、`motion_design`、按需选择的 `active_rule_ids / director_decisions`
 
 故事层只能补充这些字段，不得覆盖 `window / lyric_line / lip_sync / shot_type / generation_role`。
 缺少故事方案时 storyboard 会标记 `story_mode: timing_only`，`prompt_build.py` 必须阻断，

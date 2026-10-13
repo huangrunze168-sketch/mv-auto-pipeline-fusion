@@ -20,6 +20,13 @@ import html
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from .storyboard_build import music_anchors, REQUIRED_STORY_FIELDS
+    from .visual_development import validate as validate_development, shot_fingerprint
+except ImportError:
+    from storyboard_build import music_anchors, REQUIRED_STORY_FIELDS
+    from visual_development import validate as validate_development, shot_fingerprint
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -183,17 +190,22 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
     # 2 语言分层：歌词文本与 timeline 对应行逐字一致
     # BUG-09 修法：间奏镜(lyric_line=None或对应interlude行)不得携带歌词文本；
     # 空字典.get("text")返回None而非""，直接比较有假阳性
-    li = meta.get("lyric_line")
-    ln = line_map.get(li) if li is not None else None
-    if ln is None or ln.get("type") == "interlude":
+    lyric_ids = meta.get("lyric_lines", [meta.get("lyric_line")])
+    lyrics = [line_map[index] for index in lyric_ids if index in line_map
+              and line_map[index].get("type") != "interlude"]
+    expected_lyric = "\n".join(line.get("text", "") for line in lyrics)
+    if not lyrics:
         lyric_ok = not (meta.get("lyric_text") or "").strip()
     else:
-        lyric_ok = ln.get("text", "") == (meta.get("lyric_text") or "")
+        lyric_ok = expected_lyric == (meta.get("lyric_text") or "")
+    if shot is not None:
+        lyric_ok = lyric_ok and meta.get("lyric_lines", []) == shot.get("lyric_lines", [])
     add(2, "歌词与时间轴逐字一致", lyric_ok,
-        f"timeline='{(ln or {}).get('text','')}' vs meta='{meta.get('lyric_text','')}'")
+        f"timeline='{expected_lyric}' vs meta='{meta.get('lyric_text','')}'")
 
     # 3 唱歌格式：口型段 performance 含歌词独立行
-    add(3, "口型段歌词独立成行", (not lip) or (meta.get("lyric_text", "") in perf.splitlines()),
+    add(3, "口型段歌词独立成行", (not lip) or (
+        bool(lyrics) and all(line["text"] in perf.splitlines() for line in lyrics)),
         "lyric_in_performance_lines")
 
     # 4 念白禁令
@@ -255,7 +267,12 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
 
     # 13 场景母版一致：scene 命中锁定关键词
     sm = style.get("scene_master", {})
-    if sm.get("locked"):
+    if shot is not None and shot.get("scene_id"):
+        scene_ok = meta.get("scene_id") == shot["scene_id"] and all(
+            str(shot.get(key, "")).strip() and str(shot[key]) in pr.get("scene", "")
+            for key in ("space", "blocking", "props", "light", "material_response", "visual_center"))
+        add(13, "场景事实完整编译且场景引用一致", scene_ok, shot["scene_id"])
+    elif sm.get("locked"):
         locked_words = sum((sm.get(k, []) for k in ("space", "light_sources", "props")), [])
         hit13 = [w for w in locked_words if w in pr.get("scene", "")]
         add(13, "场景母版一致", bool(hit13), f"hit={hit13[:2]} locked={locked_words[:4]}")
@@ -336,24 +353,29 @@ def check_storyboard(sb: dict, timeline: dict) -> list:
     add("口型景别白名单且生成职责一致", not bad and not bad_roles,
         f"bad_shot_type={bad} bad_generation_role={bad_roles}")
 
-    # ④ 口型占比 45%±10%
+    # ④ 项目演唱策略可配置；未设置比例时不强加审美配额。
     lip_n = sum(1 for s in shots if s.get("lip_sync"))
     ratio = lip_n / len(shots) if shots else 0
-    add("口型占比∈[0.35,0.55]目标0.45", 0.35 <= ratio <= 0.55, f"ratio={ratio:.2f}")
+    policy = sb.get("performance_policy", {})
+    bounds = policy.get("lip_ratio_range")
+    ratio_ok = (bounds is None or (isinstance(bounds, list) and len(bounds) == 2
+                and 0 <= float(bounds[0]) <= ratio <= float(bounds[1]) <= 1))
+    add("口型占比服从项目演唱策略", ratio_ok, f"ratio={ratio:.2f} policy={bounds}")
 
-    # ⑤ 连续口型≤3
+    # ⑤ 项目配置的连续演唱约束
     run = mx = 0
     for s in shots:
         run = run + 1 if s.get("lip_sync") else 0
         mx = max(mx, run)
-    add("连续口型≤3段", mx <= int(sb.get("consecutive_lip_limit", 3)), f"max_run={mx}")
+    limit = policy.get("consecutive_lip_limit")
+    add("连续口型服从项目演唱策略", limit is None or mx <= int(limit), f"max_run={mx} policy={limit}")
 
     # ⑥ 无手写秒数（分镜自由文本字段）
     sec_hits = [s["id"] for s in shots
                 if SECONDS_RE.search(str(s.get("visual_concept", "")) + str(s.get("camera", "")))]
     add("分镜无手写秒数", not sec_hits, ",".join(sec_hits))
 
-    # ⑦ 切点落在歌词行边界，或间奏/无歌词区间内部（间奏决定分镜切点，铁律 A）
+    # ⑦ 视觉切点引用音乐依据，旧结构只用于迁移诊断。
     boundaries = sorted({round(float(ln[k]), 2) for ln in timeline.get("lines", [])
                          for k in ("start", "end")} | {0.0, round(song_dur, 2)})
     interludes = [(float(ln["start"]), float(ln["end"]))
@@ -369,7 +391,16 @@ def check_storyboard(sb: dict, timeline: dict) -> list:
         in_interlude = any(st + 0.2 < e < en - 0.2 for st, en in interludes)
         if not (near_boundary or in_interlude):
             bad_cuts.append(f"{s['id']}@{round(e, 2)}")
-    add("切点在歌词行边界或间奏内", not bad_cuts, ";".join(bad_cuts))
+    if sb.get("timing_mode") == "music_referenced_visual_edit":
+        anchor_map = sb.get("music_anchors", {})
+        bad_refs = [s["id"] for s in shots if any(
+            s.get("timing_refs", {}).get(key) not in anchor_map
+            or abs(float(s["window"][key]) - float(anchor_map.get(
+                s.get("timing_refs", {}).get(key), -1))) > 0.001 for key in ("start", "end"))
+            or not s.get("cut_reason")]
+        add("切点引用音乐依据且有剪辑理由", not bad_refs, str(bad_refs))
+    else:
+        add("旧分镜需迁移为音乐引用编辑方案", False, ";".join(bad_cuts))
 
     # ⑧ 歌词行全覆盖（几何判定：行中点落入某窗口即算覆盖——兼容一窗多行，BUG-05 修法）
     vocal_lines = [ln for ln in timeline.get("lines", []) if ln["type"] != "interlude"]
@@ -382,8 +413,7 @@ def check_storyboard(sb: dict, timeline: dict) -> list:
     add("歌词行全覆盖(几何)", not missing, str(missing))
 
     # ⑨ 故事分镜必须由 ZY Story Visual Development 产出，且每镜具备因果链与 Delta。
-    required_story = ("story_beat", "narrative_before", "current_action",
-                      "implied_next", "shot_delta", "camera_witness")
+    required_story = REQUIRED_STORY_FIELDS
     bad_story = [s.get("id") for s in shots
                  if any(not str(s.get(k, "")).strip() for k in required_story)]
     add("ZY故事分镜完整", sb.get("story_mode") == "zy_story_visual_development" and not bad_story,
@@ -464,6 +494,10 @@ def main():
             file_ids.append(expected_id)
             shot = shot_map.get(prompt_id)
             checks = check_prompt(prompt, timeline, style, has_protagonist, shot)
+            if shot is not None:
+                checks.append({"shot_id": prompt_id, "idx": 21, "item": "当前镜头设计指纹一致",
+                               "pass": prompt.get("meta", {}).get("shot_design_fingerprint") == shot_fingerprint(shot),
+                               "evidence": "镜头设计变更后必须重新编译"})
             report["shots"].append({"file": pf.name, "checks": checks,
                                     "fingerprint": sha256_file(pf)})
             all_ok &= all(c["pass"] for c in checks)
@@ -473,6 +507,31 @@ def main():
                                  "evidence": f"prompts={len(prompt_ids)} shots={len(shot_map)} "
                                              f"filenames_match={prompt_ids == file_ids}"})
         all_ok &= coverage_ok
+        try:
+            development = load(proj / "state" / "development.json")
+            dev_errors = validate_development(development, storyboard, style)
+        except (OSError, ValueError) as exc:
+            dev_errors = [str(exc)]
+        report["checks"].append({"item": "ZY视觉开发来源与连续性契约", "pass": not dev_errors,
+                                  "evidence": "; ".join(dev_errors)})
+        all_ok &= not dev_errors
+        dependencies = {
+            "story_plan_fingerprint": proj / "state" / "story_plan.json",
+            "timeline_fingerprint": proj / "state" / "timeline.json",
+            "visual_edit_fingerprint": proj / "state" / "visual_edit_plan.json",
+        }
+        dependency_ok = all(path.is_file() and storyboard.get(key) == "sha256:" + sha256_file(path)
+                            for key, path in dependencies.items())
+        if (proj / "state" / "music_structure.json").is_file():
+            dependency_ok &= storyboard.get("music_structure_fingerprint") == "sha256:" + sha256_file(proj / "state" / "music_structure.json")
+        dev_path = proj / "state" / "development.json"
+        if dev_path.is_file():
+            expected_dev = "sha256:" + sha256_file(dev_path)
+            dependency_ok &= all(load(proj / "prompts" / s["file"]).get("meta", {}).get(
+                "development_fingerprint") == expected_dev for s in report["shots"])
+        report["checks"].append({"item": "制作包依赖指纹仍有效", "pass": bool(dependency_ok),
+                                  "evidence": "修改上游后必须重新编译"})
+        all_ok &= dependency_ok
     else:
         sb = load(proj / "state" / "storyboard.json")
         checks = check_storyboard(sb, timeline)

@@ -11,9 +11,11 @@ from pathlib import Path
 try:
     from .director_review_gate import approved
     from .audio_master import resolve_master, master_encoding_args
+    from .visual_development import fingerprint
 except ImportError:  # 直接执行脚本时兼容
     from director_review_gate import approved
     from audio_master import resolve_master, master_encoding_args
+    from visual_development import fingerprint
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -70,8 +72,24 @@ def main():
     if not review_ok and "preview" not in args.output_name.lower():
         raise ValueError("未审片产物的 output-name 必须包含 preview")
     plan = json.loads((project / "state" / "chapter_plan.json").read_text(encoding="utf-8"))
-    clips = [project / "clips" / f"{chapter['id']}_fitted.mp4"
-             for chapter in plan.get("chapters", [])]
+    assembly_path = project / "state" / "edit_assembly.json"
+    if assembly_path.is_file():
+        assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
+        if (assembly.get("status") != "rendered" or assembly.get("storyboard_sha256") !=
+                fingerprint(project / "state" / "storyboard.json") or assembly.get("selection_sha256") !=
+                fingerprint(project / "state" / "edit_selection.json")):
+            raise ValueError("剪辑素材未完成或分镜/选段已改变，重新运行 edit_assemble --render")
+        clips = [project / entry["target_path"] for entry in assembly["entries"]]
+        if any(not path.is_file() or fingerprint(path) != entry.get("output_sha256")
+               for path, entry in zip(clips, assembly["entries"])):
+            raise ValueError("剪辑产物已改变，需重新验收")
+    else:
+        storyboard_path = project / "state" / "storyboard.json"
+        if (storyboard_path.is_file() and json.loads(storyboard_path.read_text(encoding="utf-8")).get(
+                "schema_version") == 2 and not args.allow_unreviewed_preview):
+            raise ValueError("V1.4 正式成片必须完成素材选段与 edit_assemble --render")
+        clips = [project / "clips" / f"{chapter['id']}_fitted.mp4"
+                 for chapter in plan.get("chapters", [])]
     missing = [str(path) for path in clips if not path.is_file()]
     if missing:
         raise FileNotFoundError("缺少章节视频: " + ", ".join(missing))

@@ -168,12 +168,14 @@ class PipelineTests(unittest.TestCase):
         method = compile_director_method(
             {"director_ref": {
                 "name": "用户选择的导演参考", "intensity": "轻微",
+                "active_axes": ["composition_space"],
                 "active_traits": ["主导色来自真实物体，不使用全局滤镜"],
             }},
             {"light": "门外冷天光与室内余火", "camera_witness": "门柱后腰高机位",
              "visual_center": "鼓槌停在鼓面上方的手",
              "information_hierarchy": "先读手与鼓，再读侧脸，最后读空城门",
-             "blocking": "人物朝右侧关外，保持方向轴"},
+             "blocking": "人物朝右侧关外，保持方向轴",
+             "director_decisions": {"composition_space": {"instruction": "秩序中一次偏离"}}},
         )
         self.assertTrue(all(method[key] for key in
                             ("light_contrast", "color_exposure", "lens_camera",
@@ -241,6 +243,8 @@ class PipelineTests(unittest.TestCase):
             (project / "prompts").mkdir()
             (project / "state" / "style.json").write_text(
                 json.dumps({"aspect_ratio": "16:9"}), encoding="utf-8")
+            (project / "state" / "storyboard.json").write_text(
+                json.dumps({"shots": []}), encoding="utf-8")
             (project / "state" / "chapter_plan.json").write_text(json.dumps({
                 "production_policy": {"prototype_chapter": "CH01"},
                 "chapters": [{"id": "CH01", "window": {"start": 0.0, "end": 2.0},
@@ -257,13 +261,8 @@ class PipelineTests(unittest.TestCase):
                 }, "edit_trigger": "门碰墙时切",
                     "anti_ai": {"motion_rule": "接触后转动"}},
             }), encoding="utf-8")
-            result = build_chapter_prompts(project)
-            manifest = json.loads((project / "state" / "generation_manifest.json")
-                                  .read_text(encoding="utf-8"))
-            self.assertFalse(result["submission_ready"])
-            self.assertFalse(manifest["submission_ready"])
-            self.assertIsNone(manifest["backend"])
-            self.assertEqual("awaiting_user_backend", manifest["status"])
+            with self.assertRaisesRegex(ValueError, "旧分镜|development.json"):
+                build_chapter_prompts(project)
 
     def test_chapter_compiler_rejects_story_summary_without_director_axes(self):
         chapter = {"id": "CH01", "window": {"start": 0.0, "end": 5.0},

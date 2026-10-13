@@ -6,6 +6,11 @@ import json
 import sys
 from pathlib import Path
 
+try:
+    from .visual_development import fingerprint
+except ImportError:
+    from visual_development import fingerprint
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -47,6 +52,7 @@ def select_prototype(chapters: list[dict]) -> str:
     ranked = sorted(
         chapters,
         key=lambda chapter: (
+            sum(len(shot.get("risk_tags", [])) for shot in chapter.get("shot_deltas", [])),
             sum(bool(shot.get("lip_sync")) for shot in chapter.get("shot_deltas", [])),
             len(chapter.get("shot_deltas", [])),
             float(chapter.get("duration_sec", 0)),
@@ -76,6 +82,8 @@ def main():
     if not shots:
         raise ValueError("storyboard.shots 不能为空")
     chapter_break_after = set(story_plan.get("chapter_break_after", []))
+    chapter_break_after.update(a["id"] for a, b in zip(shots, shots[1:])
+                               if a.get("scene_id") != b.get("scene_id"))
     groups = group_shots(shots, args.max_duration, chapter_break_after)
     continuity = storyboard.get("continuity_bible", {})
     chapters = []
@@ -89,19 +97,9 @@ def main():
             "shot_ids": [shot["id"] for shot in group],
             "reference_role": "人物身份与服装；不继承参考图构图、背景或灯光",
             "continuity_lock": continuity,
-            "shot_deltas": [{
-                "id": shot["id"],
-                "story_beat": shot["story_beat"],
-                "current_action": shot["current_action"],
-                "space": shot["space"],
-                "blocking": shot["blocking"],
-                "props": shot["props"],
-                "light": shot["light"],
-                "camera_witness": shot["camera_witness"],
-                "shot_delta": shot["shot_delta"],
-                "lyric_line": shot.get("lyric_line"),
-                "lip_sync": bool(shot.get("lip_sync")),
-            } for shot in group],
+            "shot_deltas": [{key: value for key, value in shot.items()
+                             if key not in {"prompt_fingerprint", "status", "repair"}}
+                            for shot in group],
             "delivery": {
                 "aspect_ratio": aspect_ratio,
                 "backend": None,
@@ -116,6 +114,7 @@ def main():
     plan = {
         "method": "zy_story_visual_development_to_video_chapters",
         "source_story_plan_fingerprint": storyboard.get("story_plan_fingerprint"),
+        "source_storyboard_fingerprint": fingerprint(project / "state" / "storyboard.json"),
         "max_duration_sec": args.max_duration,
         "backend": None,
         "backend_contract_status": "awaiting_user_selection",

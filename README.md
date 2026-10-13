@@ -8,15 +8,18 @@
 
 主定义与完整流程见 [SKILL.md](SKILL.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
+V1.4 的数据填写、完整执行顺序与旧项目迁移见 [视觉开发执行契约](references/visual-workflow-contract.md)。先完成 ZY 的故事、导演、参考视觉和连续性记录，再生成场景母版、关键帧与视频；后端由用户选择。
+
 ```bash
 # 1. 降级对齐（无 ASR key 的试跑时间轴；正式口型成片需接 ASR 通路）
 python scripts/timeline_fallback.py input/song_16k.wav input/lyrics.txt state/timeline.json --master-audio input/song.mp3
 
-# 2. 时间分镜推导（帧吸附 + 口型节奏 + 景别轮转）
+# 2. 无视觉编辑方案时只输出时间骨架，不自动配景别与口型
 python scripts/storyboard_build.py <project_dir> --fps 24
 
-# 3. 调用 ZY Cinematic Realism 编写 state/story_plan.json，再次合并并编译提示词
+# 3. 调用 ZY 编写 development.json、visual_edit_plan.json、story_plan.json
 python scripts/storyboard_build.py <project_dir> --fps 24
+python scripts/visual_development.py <project_dir>
 python scripts/prompt_build.py <project_dir>
 
 # 4. 硬门禁机检（关1/关5/关6，同时写 gates/*.json + gates/*.html）
@@ -26,6 +29,9 @@ python scripts/gate_checks.py gate6 <project_dir>
 # 5. 多场景关键帧预览成片（优先 input/scene_*.png；无场景图才回退人物参考图）
 # 用户未选择视频后端时，正式流程在这里停止。
 python scripts/render_preview.py <project_dir>
+
+# 用户所选静帧后端产出图片后，实际审查并用 visual_assets.py 登记母版/关键帧。
+# visual_revision.py 用于 Remix 单变量比较与局部修复契约检查，详见执行契约。
 
 # 6. 用户选定视频后端并核验真实契约后，显式传入该后端的时长上限
 python scripts/chapter_plan_build.py <project_dir> --max-duration <backend_limit>
@@ -41,6 +47,7 @@ python scripts/director_review_gate.py check <project_dir>
 # 9. 审片批准后，外部适配层才可生成其余章节；每章先执行 duration_fit.py
 
 # 10. 拼接任意用户所选后端的已贴合章节产物
+python scripts/edit_assemble.py <project_dir> --render
 python scripts/stitch_chapters.py <project_dir> --width 1280 --height 720
 
 # 未审片只能显式输出技术预览，且文件名必须包含 preview
@@ -61,7 +68,7 @@ python -m unittest discover -s tests -v
 |---|---|
 | gate_checks.py | 关1/关5(20项)/关6(9项) 硬门禁机检 |
 | timeline_fallback.py | 无 ASR key 降级对齐 |
-| storyboard_build.py | 时间分镜推导并按白名单合并 ZY 故事方案 |
+| storyboard_build.py | 音乐引用驱动的视觉分镜；无方案只输出时间骨架，不猜副歌或轮换景别 |
 | prompt_build.py | 从 ZY Scene Master / Continuity Bible 编译提示词；缺少故事方案时阻断 |
 | chapter_plan_build.py | 按视频模型最长时长聚合连续镜头，保留 Continuity Bible 与 Shot Deltas |
 | chapter_audio_build.py | 按章节窗口裁出模型中立音频资产，记录来源窗口与 SHA-256，不假设后端字段 |
@@ -74,6 +81,10 @@ python -m unittest discover -s tests -v
 | ledger.py | 成本台账（币与真钱分列） |
 | audio_master.py | 分离原始母带与分析副本，保留音轨采样率和声道，选择流复制或无损编码 |
 | restore_master_audio.py | 复用已有视频，另存原始母带音轨版本，并校验音频与画面载荷 SHA-256 |
+| visual_development.py | 故事来源、导演路由、参考权限、连续性和动作设计契约检查 |
+| visual_assets.py | 场景母版和分镜关键帧登记、版本与依赖失效检查 |
+| visual_revision.py | Remix 单轴变化与 Result Repair 定向修复契约检查 |
+| edit_assemble.py | 已审素材按帧选段与本地裁切，生成长度与交付镜头分离 |
 
 提示词构造层内置 [ZY Cinematic Realism](vendor/zy-cinematic-realism/SKILL.md) v2.5.0，
 通过 [MV 适配规范](references/zy-cinematic-integration.md) 接入 Story Visual Development、Story Source Ledger、

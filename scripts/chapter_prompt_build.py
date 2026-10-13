@@ -7,6 +7,15 @@ import json
 import sys
 from pathlib import Path
 
+try:
+    from .visual_development import require as require_development, fingerprint, shot_fingerprint
+    from .visual_assets import require_keyframe
+    from .gate_checks import check_storyboard, check_prompt
+except ImportError:
+    from visual_development import require as require_development, fingerprint, shot_fingerprint
+    from visual_assets import require_keyframe
+    from gate_checks import check_storyboard, check_prompt
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -55,10 +64,13 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
             "director_axes": method,
             "motion_physics": direction.get("anti_ai", {}).get("motion_rule", ""),
             "performance_audio_intent": (
-                f"需要演唱口型；歌词：{meta.get('lyric_text', '')}" if lip
+                f"需要演唱口型；完整行歌词仅作上下文：{meta.get('lyric_text', '')}；实际口型服从本镜音频窗口，禁止重唱被裁掉的部分" if lip
                 else "非演唱镜头；嘴唇自然闭合，不跟随人声开合"
             ),
             "cut_reason": direction["edit_trigger"],
+            "motion_design": shot.get("motion_design", {}),
+            "visual_rules": shot.get("visual_rules", []),
+            "continuity": shot.get("continuity", {}),
         })
 
     lines = [
@@ -97,6 +109,9 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
             f"- 物理：{beat['motion_physics']}",
             f"- 声画意图：{beat['performance_audio_intent']}",
             f"- 切点：{beat['cut_reason']}",
+            "- 动作起止与过程：" + json.dumps(beat["motion_design"], ensure_ascii=False),
+            "- 连续性变化：" + json.dumps(beat["continuity"], ensure_ascii=False),
+            "- 相关参考视觉规律：" + "；".join(beat["visual_rules"]),
         ])
     lines.extend([
         "", "【去 AI 化成片约束】",
@@ -120,6 +135,29 @@ def build(project: Path) -> dict:
     plan_path = project / "state" / "chapter_plan.json"
     plan = load(plan_path)
     style = load(project / "state" / "style.json")
+    storyboard = load(project / "state" / "storyboard.json")
+    if plan.get("source_storyboard_fingerprint") != fingerprint(project / "state" / "storyboard.json"):
+        raise ValueError("章节计划依赖旧分镜，请重建章节计划")
+    require_development(project, storyboard, style)
+    timeline = load(project / "state" / "timeline.json")
+    if not all(item["pass"] for item in check_storyboard(storyboard, timeline)):
+        raise ValueError("章节编译前必须通过关6")
+    gate = load(project / "gates" / "gate5.json")
+    if not gate.get("summary", {}).get("pass"):
+        raise ValueError("章节编译前必须通过关5")
+    recorded = {item["file"]: item["fingerprint"] for item in gate.get("shots", [])}
+    for shot in storyboard["shots"]:
+        path = project / "prompts" / f"{shot['id']}.json"
+        if recorded.get(path.name) != hashlib.sha256(path.read_bytes()).hexdigest():
+            raise ValueError(f"{shot['id']} 提示词已变动，重新运行关5")
+        prompt = load(path)
+        checks = check_prompt(prompt, timeline, style, any((project / "input").glob("protagonist.*")), shot)
+        if (not all(item["pass"] for item in checks)
+                or prompt["meta"].get("development_fingerprint") != fingerprint(project / "state/development.json")
+                or prompt["meta"].get("shot_design_fingerprint") != shot_fingerprint(shot)):
+            raise ValueError(f"{shot['id']} 制作包对应旧设计，重新编译并运行关5")
+    registry = load(project / "state" / "visual_assets.json")
+    frames = {shot["id"]: require_keyframe(project, shot, registry) for shot in storyboard["shots"]}
     aspect_ratio = str(style.get("aspect_ratio", "")).strip()
     if not aspect_ratio:
         raise ValueError("style.aspect_ratio 不能为空")
@@ -132,6 +170,10 @@ def build(project: Path) -> dict:
         if missing:
             raise FileNotFoundError("缺少逐镜提示词: " + ", ".join(missing))
         compiled = compile_chapter(chapter, prompt_map, aspect_ratio)
+        compiled["keyframe_references"] = {
+            sid: {"path": frames[sid]["path"], "sha256": frames[sid]["sha256"],
+                  "roles": ["likeness", "wardrobe", "location", "composition"]}
+            for sid in chapter["shot_ids"]}
         json_path = out_dir / f"{chapter['id']}.json"
         text_path = out_dir / f"{chapter['id']}.txt"
         json_path.write_text(json.dumps(compiled, ensure_ascii=False, indent=2) + "\n",
