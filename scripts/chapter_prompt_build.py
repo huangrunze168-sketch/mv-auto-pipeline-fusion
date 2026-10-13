@@ -50,6 +50,7 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
             "story_change": shot["story"]["shot_delta"],
             "current_action": shot["performance"].splitlines()[0],
             "space_and_blocking": shot["scene"],
+            "character_and_wardrobe": shot.get("subject", ""),
             "camera_witness": shot["camera"],
             "director_axes": method,
             "motion_physics": direction.get("anti_ai", {}).get("motion_rule", ""),
@@ -84,6 +85,7 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
             f"- 变化：{beat['story_change']}",
             f"- 表演：{beat['current_action']}",
             f"- 空间：{beat['space_and_blocking']}",
+            f"- 人物与服装锁：{beat['character_and_wardrobe']}",
             f"- 观看：{beat['camera_witness']}",
             "- 导演四轴：" + "；".join(
                 str(beat["director_axes"].get(key, "")) for key in

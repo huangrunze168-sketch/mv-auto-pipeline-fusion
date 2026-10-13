@@ -93,8 +93,12 @@ def main():
                  f"信息层级：{shot['information_hierarchy']}；道具与状态：{shot['props']}；"
                  f"实际光源：{shot['light']}；材质受光与磨损：{shot['material_response']}；"
                  f"空间与人物调度：{shot['blocking']}")
-        subject = (f"参考图只负责人物身份与服装：参考图中的年轻女子，{style.get('wardrobe', '')}；"
-                   "跨镜保持五官比例、发型、耳饰、衣料纹样与层次完全一致，不继承参考图构图、背景或灯光"
+        subject = ("仅参考图中人物的五官、发型、耳饰与服装；"
+                   "跨镜保持同一人物的脸型、眼形与眼距、眉形、鼻形、唇形及五官比例，"
+                   "保持同一套服装的颜色、版型、领口、袖型、面料、纹样、刺绣、层次与配饰；"
+                   "仅在用户明确要求换装时更新服装锁；"
+                   "场景、构图、光线及动作服从本镜 Scene Master，"
+                   "表情、姿态、衣料运动与受光自然变化，不继承参考图姿势、构图、背景或灯光"
                    if protagonist else "风沙中的边关环境与被岁月磨损的器物")
         base_action = (f"{shot['current_action']}；视线目标：{shot['gaze_target']}；"
                        f"动作物理：{shot['action_physics']}")
