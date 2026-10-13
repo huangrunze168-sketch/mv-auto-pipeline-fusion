@@ -8,6 +8,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from .audio_master import resolve_master, probe_audio
+except ImportError:
+    from audio_master import resolve_master, probe_audio
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -28,20 +33,24 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def build_audio_segments(project: Path, *, sample_rate: int = 44100) -> dict:
+def build_audio_segments(project: Path, *, sample_rate: int | None = None) -> dict:
     plan_path = project / "state" / "chapter_plan.json"
     timeline_path = project / "state" / "timeline.json"
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
-    source = project / timeline["source_audio"]
-    if not source.is_file():
-        raise FileNotFoundError(f"母带不存在: {source}")
+    source = resolve_master(project, timeline)
+    source_info = probe_audio(source)
+    if sample_rate is not None and sample_rate <= 0:
+        raise ValueError("sample_rate 必须大于 0")
+    rate_args = ["-ar", str(sample_rate)] if sample_rate is not None else []
 
     target_dir = project / "input" / "chapter_audio"
     target_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "mode": "model_neutral_chapter_audio_assets",
-        "source_audio": timeline["source_audio"],
+        "source_audio": str(source),
+        "source_sample_rate": int(source_info["sample_rate"]),
+        "source_channels": int(source_info["channels"]),
         "source_sha256": sha256(source),
         "segments": [],
     }
@@ -51,8 +60,8 @@ def build_audio_segments(project: Path, *, sample_rate: int = 44100) -> dict:
         output = target_dir / f"{chapter['id']}.wav"
         run([
             "ffmpeg", "-y", "-v", "error", "-ss", f"{start:.10f}",
-            "-t", f"{duration:.10f}", "-i", str(source), "-vn", "-ac", "2",
-            "-ar", str(sample_rate), "-c:a", "pcm_s16le", str(output),
+            "-t", f"{duration:.10f}", "-i", str(source), "-vn", *rate_args,
+            "-c:a", "pcm_s24le", str(output),
         ])
         chapter["audio_asset"] = {
             "contains_lip_sync_shots": any(bool(item.get("lip_sync"))
@@ -75,7 +84,8 @@ def build_audio_segments(project: Path, *, sample_rate: int = 44100) -> dict:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("project_dir")
-    parser.add_argument("--sample-rate", type=int, default=44100)
+    parser.add_argument("--sample-rate", type=int, default=None,
+                        help="仅在用户所选后端要求时重采样；默认保持母带采样率与声道")
     args = parser.parse_args()
     result = build_audio_segments(Path(args.project_dir).resolve(), sample_rate=args.sample_rate)
     print(json.dumps(result, ensure_ascii=False))

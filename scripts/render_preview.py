@@ -23,6 +23,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from .audio_master import resolve_master, master_encoding_args
+except ImportError:
+    from audio_master import resolve_master, master_encoding_args
+
 PRESETS = [  # Ken Burns 预设轮转: (zoom表达式模板, x, y)
     ("1+0.10*on/{D}", "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"),          # 推近
     ("1.10-0.10*on/{D}", "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"),       # 拉远
@@ -41,20 +46,7 @@ def run(cmd):
 
 
 def resolve_audio(proj: Path, timeline: dict) -> Path:
-    declared = timeline.get("source_audio")
-    if declared:
-        path = Path(declared)
-        candidate = path if path.is_absolute() else proj / path
-        if candidate.is_file():
-            return candidate
-    candidates = sorted(p for p in (proj / "input").iterdir()
-                        if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
-                        and "16k" not in p.stem.lower())
-    if len(candidates) == 1:
-        return candidates[0]
-    if not candidates:
-        raise FileNotFoundError("input/ 中没有可用母带，且 timeline.source_audio 无效")
-    raise ValueError("input/ 中存在多个母带，请在 timeline.source_audio 中明确指定")
+    return resolve_master(proj, timeline)
 
 
 def resolve_visual_asset(proj: Path, shot: dict, index: int, total: int,
@@ -178,7 +170,7 @@ def main():
     # 母带重贴
     final = out_dir / a.output_name
     run(["ffmpeg", "-y", "-v", "error", "-i", str(silent), "-i", str(audio),
-         "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+         "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", *master_encoding_args(audio),
          str(final)])
 
     # 生成真实候选音轨与母带的对齐报告，而不是把母带和自己比较。
@@ -203,6 +195,7 @@ def main():
 
     total = sum(r["actual"] for r in report)
     print(json.dumps({"final": str(final), "verification_report": str(report_path),
+                      "master_audio": str(audio), "audio_encoding": master_encoding_args(audio),
                       "verification": verification, "clips": len(report),
                       "sum_actual": round(total, 3),
                       "max_delta": round(max(abs(r["delta"]) for r in report), 4)},

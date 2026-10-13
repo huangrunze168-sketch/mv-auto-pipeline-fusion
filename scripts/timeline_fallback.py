@@ -54,6 +54,7 @@ def main():
     ap.add_argument("--intro", type=float, default=2.0)
     ap.add_argument("--outro", type=float, default=2.0)
     ap.add_argument("--song", default="song")
+    ap.add_argument("--master-audio", help="用户原始母带路径；分析 WAV 与交付母带必须分离")
     a = ap.parse_args()
 
     first, last, dur = active_span(a.song_wav)
@@ -85,6 +86,14 @@ def main():
     tl = {"song": a.song, "source_audio": source_audio, "duration_sec": round(dur, 3),
           "fps_assumed": 24, "asr_engine": "uniform_fallback",
           "lyrics_source": "official", "lines": [], "segments": [], "pending_review": []}
+    if a.master_audio:
+        master = Path(a.master_audio).resolve()
+        if not master.is_file():
+            raise FileNotFoundError(f"原始母带不存在: {master}")
+        try:
+            tl["master_audio"] = master.relative_to(Path(a.out_json).resolve().parent.parent).as_posix()
+        except ValueError:
+            tl["master_audio"] = str(master)
     if span0 > 0.001:
         tl["lines"].append({"index": 0, "type": "interlude", "text": "",
                             "start": 0.0, "end": round(span0, 3),

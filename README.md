@@ -10,7 +10,7 @@
 
 ```bash
 # 1. 降级对齐（无 ASR key 的试跑时间轴；正式口型成片需接 ASR 通路）
-python scripts/timeline_fallback.py input/song.wav input/lyrics.txt state/timeline.json
+python scripts/timeline_fallback.py input/song_16k.wav input/lyrics.txt state/timeline.json --master-audio input/song.mp3
 
 # 2. 时间分镜推导（帧吸附 + 口型节奏 + 景别轮转）
 python scripts/storyboard_build.py <project_dir> --fps 24
@@ -72,6 +72,8 @@ python -m unittest discover -s tests -v
 | align_verify.py | 对齐三验（纯标准库） |
 | render_preview.py | 多场景关键帧预览（章节分配+等比画面+Ken Burns+母带重贴） |
 | ledger.py | 成本台账（币与真钱分列） |
+| audio_master.py | 分离原始母带与分析副本，保留音轨采样率和声道，选择流复制或无损编码 |
+| restore_master_audio.py | 复用已有视频，另存原始母带音轨版本，并校验音频与画面载荷 SHA-256 |
 
 提示词构造层内置 [ZY Cinematic Realism](vendor/zy-cinematic-realism/SKILL.md) v2.5.0，
 通过 [MV 适配规范](references/zy-cinematic-integration.md) 接入 Story Visual Development、Story Source Ledger、
@@ -79,6 +81,8 @@ Scene Master、Continuity Bible、Shot Delta 与局部修复流程。缺少 `sta
 `timing_only` 时间骨架，禁止静默退化成歌词动作模板。
 
 ## 环境依赖
+
+交付音轨必须来自 `timeline.master_audio` 的用户原始母带。`source_audio` 可为 ASR/对齐用的 16 kHz 副本，但不得用于交付。合成直接复制可承载的原始 MP3/AAC 音频流；PCM/FLAC 等转为 ALAC 无损音轨。原采样率和声道保留，生成片段音轨不进入母带重贴版。音轨对齐 PASS 仅代表时间一致，不代表音质一致。
 
 Python 3.10+（纯标准库）、ffmpeg/ffprobe。**视频生成后端由用户提供，skill 只提问不内置**——未提供后端时流程止步于关 6 + 静帧预览成片（见 `references/api-backends.md` 后端门限）。
 

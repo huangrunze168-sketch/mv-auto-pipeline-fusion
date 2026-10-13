@@ -8,6 +8,7 @@
 {
   "song": "demo_song",
   "source_audio": "input/demo_song.mp3",
+  "master_audio": "input/demo_song.mp3", // 用户原始母带；source_audio 可为分析副本，交付只读 master_audio
   "duration_sec": 245.32,
   "fps_assumed": 24,
   "asr_engine": "volc-audio-align",

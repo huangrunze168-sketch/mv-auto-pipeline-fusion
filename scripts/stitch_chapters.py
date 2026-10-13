@@ -10,8 +10,10 @@ from pathlib import Path
 
 try:
     from .director_review_gate import approved
+    from .audio_master import resolve_master, master_encoding_args
 except ImportError:  # 直接执行脚本时兼容
     from director_review_gate import approved
+    from audio_master import resolve_master, master_encoding_args
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -76,9 +78,8 @@ def main():
 
     timeline = json.loads((project / "state" / "timeline.json").read_text(encoding="utf-8"))
     duration = float(timeline["duration_sec"])
-    audio = project / timeline["source_audio"]
-    if not audio.is_file():
-        raise FileNotFoundError(f"母带不存在: {audio}")
+    audio = resolve_master(project, timeline)
+    audio_args = master_encoding_args(audio)
     output = project / "output" / args.output_name
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -97,11 +98,12 @@ def main():
                            f"crop={width}:{height}"),
              "-map", "0:v:0", "-map", "1:a:0", "-t", f"{duration:.6f}",
              "-r", "24", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", str(output)])
+             "-pix_fmt", "yuv420p", *audio_args, "-shortest", str(output)])
 
     actual = probe_duration(output)
     print(json.dumps({"output": str(output), "chapters": len(clips),
                       "target_duration": duration, "actual_duration": round(actual, 6),
+                      "master_audio": str(audio), "audio_encoding": audio_args,
                       "canvas": f"{width}x{height}"}, ensure_ascii=False))
 
 

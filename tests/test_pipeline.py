@@ -22,6 +22,7 @@ from scripts.director_review_gate import DIMENSIONS, initial_review, validate_re
 from scripts.chapter_prompt_build import build as build_chapter_prompts, compile_chapter
 from scripts.prompt_build import compile_director_method
 from scripts.render_preview import resolve_visual_asset
+from scripts.audio_master import resolve_master, master_encoding_args, probe_audio
 
 
 def write_wav(path: Path, duration: float, silence: bool = False) -> None:
@@ -44,6 +45,60 @@ def write_wav(path: Path, duration: float, silence: bool = False) -> None:
 
 
 class PipelineTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "需要 ffmpeg")
+    def test_analysis_copy_cannot_silently_replace_master(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            write_wav(project / "analysis.wav", 0.5)
+            with self.assertRaisesRegex(ValueError, "低采样率分析音频"):
+                resolve_master(project, {"source_audio": "analysis.wav"})
+            self.assertEqual(resolve_master(project, {
+                "source_audio": "analysis.wav", "master_audio": "analysis.wav",
+            }), project / "analysis.wav")
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "需要 ffmpeg")
+    def test_mp3_master_survives_mux_with_identical_audio_packets(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            source = Path(tmp) / "original.mp3"
+            output = Path(tmp) / "delivered.mp4"
+            subprocess.run([
+                "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                "sine=frequency=12000:sample_rate=44100:duration=0.5",
+                "-ac", "2", "-c:a", "libmp3lame", "-b:a", "192k", str(source),
+            ], check=True, capture_output=True)
+            subprocess.run([
+                "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                "color=s=64x64:r=24:d=0.5", "-i", str(source),
+                "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264",
+                *master_encoding_args(source), str(output),
+            ], check=True, capture_output=True)
+            info = probe_audio(output)
+            self.assertEqual(info["codec_name"], "mp3")
+            self.assertEqual(int(info["sample_rate"]), 44100)
+            self.assertEqual(info["channels"], 2)
+            def payload_hash(path):
+                return subprocess.run([
+                    "ffmpeg", "-v", "error", "-i", str(path), "-map", "0:a:0",
+                    "-c:a", "copy", "-f", "hash", "-hash", "sha256", "-",
+                ], check=True, capture_output=True, text=True).stdout.strip()
+            self.assertEqual(payload_hash(source), payload_hash(output))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "需要 ffmpeg")
+    def test_pcm_master_uses_lossless_encoding(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            source, output = Path(tmp) / "master.wav", Path(tmp) / "delivery.m4a"
+            write_wav(source, 0.5)
+            subprocess.run([
+                "ffmpeg", "-y", "-v", "error", "-i", str(source),
+                *master_encoding_args(source), str(output),
+            ], check=True, capture_output=True)
+            def decoded(path):
+                return subprocess.run([
+                    "ffmpeg", "-v", "error", "-i", str(path),
+                    "-f", "s16le", "-c:a", "pcm_s16le", "-",
+                ], check=True, capture_output=True).stdout
+            self.assertEqual(decoded(source), decoded(output))
+
     def run_script(self, name: str, *args: object) -> subprocess.CompletedProcess:
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
@@ -231,7 +286,8 @@ class PipelineTests(unittest.TestCase):
             (project / "state").mkdir()
             write_wav(project / "input" / "song.wav", 1.0)
             (project / "state" / "timeline.json").write_text(json.dumps({
-                "source_audio": "input/song.wav", "duration_sec": 1.0,
+                "source_audio": "input/song.wav", "master_audio": "input/song.wav",
+                "duration_sec": 1.0,
             }), encoding="utf-8")
             (project / "state" / "chapter_plan.json").write_text(json.dumps({
                 "chapters": [{
@@ -407,7 +463,8 @@ class PipelineTests(unittest.TestCase):
             (project / "state").mkdir()
             wav_path = project / "input" / "master.wav"
             write_wav(wav_path, 1.0)
-            timeline = {"duration_sec": 1.0, "source_audio": "input/master.wav", "lines": [
+            timeline = {"duration_sec": 1.0, "source_audio": "input/master.wav",
+                        "master_audio": "input/master.wav", "lines": [
                 {"index": 1, "type": "vocal", "text": "甲", "start": 0.0, "end": 0.5},
                 {"index": 2, "type": "vocal", "text": "乙", "start": 0.5, "end": 1.0},
             ]}
