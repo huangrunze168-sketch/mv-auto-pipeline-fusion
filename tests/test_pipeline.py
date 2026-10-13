@@ -16,7 +16,9 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(ROOT))
 
 from scripts.gate_checks import REF_DUTIES, check_storyboard
-from scripts.chapter_plan_build import group_shots, select_prototype, require_production_timing
+from scripts.chapter_plan_build import (
+    group_shots, select_prototype, require_production_timing, require_director_final_cut,
+)
 from scripts.chapter_audio_build import build_audio_segments
 from scripts.director_review_gate import DIMENSIONS, initial_review, validate_review
 from scripts.chapter_prompt_build import build as build_chapter_prompts, compile_chapter
@@ -24,6 +26,10 @@ from scripts.prompt_build import compile_director_method, keyframe_moment
 from scripts.storyboard_build import apply_story_plan, REQUIRED_STORY_FIELDS
 from scripts.render_preview import resolve_visual_asset
 from scripts.audio_master import resolve_master, master_encoding_args, probe_audio
+from scripts.submission_contract import validate_submission_contract
+from scripts.omni_reference import (
+    build_omni_reference_blueprint, validate_omni_reference_blueprint,
+)
 
 
 def write_wav(path: Path, duration: float, silence: bool = False) -> None:
@@ -46,6 +52,221 @@ def write_wav(path: Path, duration: float, silence: bool = False) -> None:
 
 
 class PipelineTests(unittest.TestCase):
+    def test_omni_blueprint_is_backend_neutral_and_routes_each_reference(self):
+        chapter = {
+            "id": "CH01",
+            "audio_asset": {"local_path": "input/chapter_audio/CH01.wav", "sha256": "audio"},
+        }
+        beats = [
+            {
+                "shot_id": "SH001", "start_sec": 0.0, "end_sec": 2.0,
+                "keyframe_handle": "@图片 2", "story_change": "她发现信纸",
+                "current_action": "手指停在旧字上", "camera_witness": "桌侧近景",
+                "editorial_role": "建立线索", "cut_relation": "视线匹配",
+            },
+            {
+                "shot_id": "SH002", "start_sec": 2.0, "end_sec": 4.0,
+                "keyframe_handle": "@图片 3", "story_change": "她抬眼看门外",
+                "current_action": "视线越过门框", "camera_witness": "门外反打",
+                "editorial_role": "揭示目标", "cut_relation": "",
+            },
+        ]
+        blueprint = build_omni_reference_blueprint(
+            chapter, beats,
+            protagonist_source={"local_path": "input/protagonist.png", "sha256": "hero"},
+            keyframe_sources={
+                "SH001": {"local_path": "keyframes/SH001.png", "sha256": "one"},
+                "SH002": {"local_path": "keyframes/SH002.png", "sha256": "two"},
+            },
+        )
+        self.assertIsNone(blueprint["backend"])
+        self.assertEqual(blueprint["adapter_status"], "not_in_scope")
+        self.assertEqual(validate_omni_reference_blueprint(blueprint), [])
+        self.assertEqual(
+            blueprint["timeline"][0]["reference_handles"],
+            ["@图片 1", "@图片 2", "@音频 1"],
+        )
+        self.assertEqual(blueprint["audio_policy"]["delivery_audio"],
+                         "timeline.master_audio")
+
+    def test_omni_blueprint_rejects_character_role_leak(self):
+        blueprint = {
+            "mode": "omni_reference_blueprint", "backend": None,
+            "subject_definitions": [{"subject_id": "hero", "handle": "@图片 1"}],
+            "reference_bindings": [{
+                "handle": "@图片 1", "modality": "image",
+                "source": {"local_path": "hero.png"},
+                "intents": ["character_identity", "wardrobe", "composition"],
+                "do_not_inherit": [],
+            }],
+            "timeline": [],
+            "audio_policy": {
+                "reference_audio_is_condition_only": True,
+                "generate_audio": False,
+                "delivery_audio": "timeline.master_audio",
+            },
+        }
+        errors = validate_omni_reference_blueprint(blueprint)
+        self.assertTrue(any("只能锁定" in error for error in errors))
+        self.assertTrue(any("未隔离" in error for error in errors))
+
+    def test_literal_subject_mention_cannot_fall_back_to_random_person(self):
+        contract = {
+            "prompt": "@女主 在庭院中演唱",
+            "subject_reference": {"required": True, "name": "女主"},
+            "request": {"generate_audio": False},
+        }
+        errors = validate_submission_contract(contract)
+        self.assertTrue(any("只是提示词文本" in error for error in errors))
+        self.assertTrue(any("可追溯绑定" in error for error in errors))
+
+    def test_unbound_generic_upload_cannot_impersonate_subject(self):
+        contract = {
+            "prompt": "女主在庭院中演唱",
+            "subject_reference": {
+                "required": True,
+                "name": "女主",
+                "binding": {
+                    "kind": "generic_upload_url",
+                    "review_status": "approved",
+                    "asset_id": "ordinary-upload",
+                },
+            },
+            "structured_mentions": [{"name": "女主", "mention_id": "m1"}],
+            "request": {"generate_audio": False},
+        }
+        errors = validate_submission_contract(contract)
+        self.assertTrue(any("可追溯绑定" in error for error in errors))
+
+    def test_approved_structured_subject_binding_can_submit(self):
+        contract = {
+            "prompt": "@女主 在庭院中演唱",
+            "reference_mode": "omni_reference",
+            "reference_bindings": [{
+                "handle": "@女主", "modality": "image",
+                "source": {"asset_id": "subject-123"},
+                "intents": ["character_identity", "wardrobe"],
+            }],
+            "backend_capabilities": {
+                "verified": True, "omni_reference": True,
+                "multi_shot": True, "timestamp_control": True,
+            },
+            "subject_reference": {
+                "required": True,
+                "name": "女主",
+                "binding": {
+                    "kind": "library_subject",
+                    "review_status": "approved",
+                    "subject_id": "subject-123",
+                },
+            },
+            "structured_mentions": [{"name": "女主", "mention_id": "subject-123"}],
+            "audio_reference": {"condition_only": True},
+            "request": {"generate_audio": False},
+            "director_cut_status": "approved",
+        }
+        self.assertEqual(validate_submission_contract(contract), [])
+
+    def test_every_video_backend_must_use_omni_reference_model(self):
+        base = {
+            "prompt": "庭院中人物转身",
+            "request": {"generate_audio": False},
+            "director_cut_status": "approved",
+        }
+        for mode in (None, "text_to_video", "first_frame_to_video", "subject_library"):
+            contract = {**base, "reference_mode": mode}
+            errors = validate_submission_contract(contract)
+            self.assertTrue(any("必须使用 reference_mode=omni_reference" in e
+                                for e in errors), mode)
+
+    def test_all_reference_requires_verified_roles_and_multishot_capability(self):
+        contract = {
+            "prompt": "参考 @图片 1 的人物五官与服装；参考 @图片 2 的场景地理；"
+                      "参考 @视频 1 的镜头运动；参考 @音频 1 的表演节奏。",
+            "reference_mode": "omni_reference",
+            "reference_bindings": [
+                {"handle": "@图片 1", "modality": "image",
+                 "source": {"asset_id": "hero"},
+                 "intents": ["character_identity", "wardrobe"]},
+                {"handle": "@图片 2", "modality": "image",
+                 "source": {"asset_id": "scene"},
+                 "intents": ["location", "composition"]},
+                {"handle": "@视频 1", "modality": "video",
+                 "source": {"asset_id": "camera"},
+                 "intents": ["camera_motion"]},
+                {"handle": "@音频 1", "modality": "audio",
+                 "source": {"asset_id": "performance"},
+                 "intents": ["performance_timing"]},
+            ],
+            "backend_capabilities": {
+                "verified": True, "omni_reference": True, "multi_shot": True,
+                "timestamp_control": True,
+                "reference_limits": {"image": 30, "video": 10, "audio": 10},
+            },
+            "audio_reference": {"condition_only": True},
+            "request": {"generate_audio": False},
+            "edit_shots": [
+                {"id": "SH001", "cut_relation": "动作匹配"},
+                {"id": "SH002"},
+            ],
+            "director_cut_status": "approved",
+        }
+        self.assertEqual(validate_submission_contract(contract), [])
+        contract["reference_bindings"] = contract["reference_bindings"][:-1]
+        contract["backend_capabilities"]["multi_shot"] = False
+        errors = validate_submission_contract(contract)
+        self.assertTrue(any("@音频1" in error and "未绑定" in error for error in errors))
+        self.assertTrue(any("multi_shot" in error for error in errors))
+
+    def test_omni_reference_direct_image_can_lock_character(self):
+        contract = {
+            "prompt": "参考 @图片 1 的五官、发型和服装，不参考其背景与构图。",
+            "reference_mode": "omni_reference",
+            "reference_bindings": [{
+                "handle": "@图片 1", "modality": "image",
+                "source": {"url": "https://a.lovart.ai/assets/hero.png"},
+                "intents": ["character_identity", "wardrobe"],
+            }],
+            "subject_reference": {
+                "required": True, "handle": "@图片 1",
+                "binding": {"kind": "omni_image_reference",
+                            "url": "https://a.lovart.ai/assets/hero.png"},
+            },
+            "backend_capabilities": {
+                "verified": True, "omni_reference": True,
+                "multi_shot": True, "timestamp_control": True,
+                "reference_limits": {"image": 30, "video": 10, "audio": 10},
+            },
+            "request": {"generate_audio": False},
+            "director_cut_status": "approved",
+        }
+        self.assertEqual(validate_submission_contract(contract), [])
+
+    def test_director_cut_rejects_model_limit_as_edit_duration(self):
+        shots = [{"id": "SH001", "window": {"start": 0.0, "end": 15.0}}]
+        edit = {
+            "timing_status": "director_approved_final_cut",
+            "director_cut_approved": True,
+            "performance_policy": {"max_edit_shot_duration_sec": 6.0},
+            "shots": [{"id": "SH001", "editorial_role": "建立空间"}],
+        }
+        with self.assertRaisesRegex(ValueError, "长镜头理由"):
+            require_director_final_cut(edit, shots)
+        edit["shots"][0].update(
+            director_approved_long_take=True,
+            long_take_justification="表演在同一空间内连续完成，切开会破坏信息释放",
+        )
+        require_director_final_cut(edit, shots)
+
+    def test_conditioning_audio_cannot_be_regenerated(self):
+        contract = {
+            "prompt": "庭院空镜",
+            "audio_reference": {"condition_only": True},
+            "request": {"generate_audio": True},
+        }
+        errors = validate_submission_contract(contract)
+        self.assertTrue(any("generate_audio" in error for error in errors))
+
     def test_storyboard_preserves_keyframe_moment_and_shooting_design(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
             project = Path(tmp)
@@ -297,6 +518,32 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("门外冷光，屋内暗部保留", compiled["prompt"])
         self.assertIn("秩序中一次偏离", compiled["prompt"])
         self.assertIn("门柱内侧腰高", compiled["prompt"])
+        self.assertIn("@图片 1：只参考同一人物", compiled["prompt"])
+        self.assertIn("@图片 2：只参考 SH001", compiled["prompt"])
+        self.assertIn("@音频 1：只参考本章表演节奏", compiled["prompt"])
+
+    def test_chapter_prompt_without_character_starts_keyframes_at_image_one(self):
+        chapter = {"id": "CH01", "window": {"start": 0.0, "end": 2.0},
+                   "shot_ids": ["SH001"], "continuity_lock": {}}
+        prompt_map = {"SH001": {
+            "meta": {"shot_id": "SH001", "window": {"start": 0.0, "end": 2.0},
+                     "lip_sync": False},
+            "story": {"before": "门关", "next": "门开", "shot_delta": "门开"},
+            "performance": "门被风推开", "scene": "空房", "camera": "固定机位",
+            "direction": {"method": {
+                "light_contrast": "窗光", "color_exposure": "木色",
+                "lens_camera": "门后固定", "composition_space": "门框分层",
+            }, "edit_trigger": "门停时切", "scene_master": {
+                "story_intent": "揭示出口", "obstacle": "门未开",
+                "audience_information": "出口出现", "shooting_station": "门后腰高",
+                "frame_boundary": "门柱截边", "visual_acceptance": "先见门后见院",
+            }, "anti_ai": {"motion_rule": "风先动帘，门后转动"}},
+        }}
+        compiled = compile_chapter(
+            chapter, prompt_map, "16:9", has_character_reference=False,
+        )
+        self.assertNotIn("只参考同一人物", compiled["prompt"])
+        self.assertIn("@图片 1：只参考 SH001", compiled["prompt"])
 
     def test_chapter_manifest_blocks_submission_until_user_selects_backend(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:

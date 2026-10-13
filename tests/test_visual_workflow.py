@@ -33,11 +33,17 @@ def fixture(project):
     ]}
     music = {"cues": [{"id": "accent", "time_sec": 2.0,
                        "kind": "accent", "evidence": "测试音乐重音"}]}
-    edit = {"shots": [
+    edit = {
+        "timing_status": "director_approved_final_cut",
+        "director_cut_approved": True,
+        "performance_policy": {"max_edit_shot_duration_sec": 3.0},
+        "shots": [
         {"id": "SH001", "scene_id": "gate", "start_ref": "song:start", "end_ref": "cue:accent",
-         "shot_type": "全景", "lip_sync": False, "cut_reason": "重音时人物停下"},
+         "shot_type": "全景", "lip_sync": False, "cut_reason": "重音时人物停下",
+         "cut_relation": "动作匹配", "editorial_role": "建立门内外空间"},
         {"id": "SH002", "scene_id": "gate", "start_ref": "cue:accent", "end_ref": "song:end",
-         "shot_type": "近景", "lip_sync": True, "cut_reason": "人物完成决定"},
+         "shot_type": "近景", "lip_sync": True, "cut_reason": "人物完成决定",
+         "editorial_role": "交代人物决定"},
     ]}
     bible = {key: "保持已确认的事实" for key in
              ("character_lock", "wardrobe_lock", "prop_lock", "location_topology", "lighting_bible")}
@@ -273,9 +279,32 @@ class VisualWorkflowTests(unittest.TestCase):
                 register(project, shot["id"], "keyframe", "gate", asset, "测试观察", "M1")
             result = build_chapters(project)
             self.assertFalse(result["submission_ready"])
+            manifest = json.loads(
+                (project / "state/generation_manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["required_reference_mode"], "omni_reference")
+            self.assertFalse(
+                manifest["backend_selection_policy"]["fallback_to_non_omni_model"]
+            )
+            chapter_plan = json.loads(
+                (project / "state/chapter_plan.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                chapter_plan["backend_selection_policy"]["required_reference_mode"],
+                "omni_reference",
+            )
             package = json.loads((project / "prompts/chapters/CH01.json").read_text(encoding="utf-8"))
             self.assertEqual(len(package["keyframe_references"]), 2)
             self.assertIn("动作起止与过程", package["prompt"])
+            self.assertEqual(package["omni_reference"]["mode"], "omni_reference_blueprint")
+            self.assertIsNone(package["omni_reference"]["backend"])
+            self.assertEqual(
+                package["omni_reference"]["timeline"][0]["cut_relation"], "动作匹配",
+            )
+            self.assertEqual(
+                package["omni_reference"]["audio_policy"]["delivery_audio"],
+                "timeline.master_audio",
+            )
             # 修改上游后不能用旧批准资产或旧机检报告继续编译。
             dev = json.loads((project / "state/development.json").read_text(encoding="utf-8"))
             dev["treatment"]["concept"] = "改变故事"

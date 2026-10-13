@@ -144,7 +144,73 @@ V1.4.1 的 `story_plan.shots[]` 还必须提供 `story_intent / obstacle / keyfr
 
 **不对口型段的 audio_policy 必须含**：「嘴唇自然闭合、不跟随人声开合」，且 negative_prompt 必须含口型类词（`张嘴说话|对口型|lip movement`）——机检第 5 项。
 
-## 5. state/ledger.jsonl —— 成本台账（追加制）
+## 5. prompts/chapters/CHxx.json —— 全能参考章节蓝图
+
+`chapter_prompt_build.py` 会在模型中立章节包中写入 `omni_reference`。该对象只定义参考素材职责和逐镜时间轴，不包含供应商字段，也不提交生成任务。
+
+```json
+{
+  "omni_reference": {
+    "schema_version": 1,
+    "mode": "omni_reference_blueprint",
+    "backend": null,
+    "adapter_status": "not_in_scope",
+    "subject_definitions": [
+      {
+        "subject_id": "protagonist",
+        "handle": "@图片 1",
+        "retain": ["五官比例", "发型", "耳饰", "同一套服装的结构与材质"],
+        "reject_transfer": ["background", "composition", "lighting", "pose"]
+      }
+    ],
+    "reference_bindings": [
+      {
+        "handle": "@图片 1",
+        "modality": "image",
+        "source": {"local_path": "input/protagonist.png", "sha256": "..."},
+        "intents": ["character_identity", "wardrobe"],
+        "do_not_inherit": ["background", "composition", "lighting", "pose"]
+      },
+      {
+        "handle": "@图片 2",
+        "modality": "image",
+        "shot_id": "SH001",
+        "source": {"local_path": "clips/keyframes/SH001.png", "sha256": "..."},
+        "intents": ["composition", "location", "blocking_start_state"],
+        "do_not_inherit": ["character_identity", "wardrobe", "performance_timing"]
+      },
+      {
+        "handle": "@音频 1",
+        "modality": "audio",
+        "source": {"local_path": "input/chapter_audio/CH01.wav", "sha256": "..."},
+        "intents": ["performance_timing", "action_timing"],
+        "condition_only": true,
+        "generate_audio": false,
+        "final_master_replaced_locally": true
+      }
+    ],
+    "timeline": [
+      {
+        "shot_id": "SH001",
+        "start_sec": 0.0,
+        "end_sec": 2.0,
+        "reference_handles": ["@图片 1", "@图片 2", "@音频 1"],
+        "editorial_role": "建立线索",
+        "cut_relation": "视线匹配"
+      }
+    ],
+    "audio_policy": {
+      "reference_audio_is_condition_only": true,
+      "generate_audio": false,
+      "delivery_audio": "timeline.master_audio"
+    }
+  }
+}
+```
+
+人物图只允许承担 `character_identity + wardrobe`；逐镜关键帧只承担构图、地点与起始调度；章节音频只承担表演和动作时序。`scripts/omni_reference.py` 对这些边界、时间连续性、引用绑定和母带回贴策略执行机检。
+
+## 6. state/ledger.jsonl —— 成本台账（追加制）
 
 ```json
 {"ts": "2026-10-12T14:00:00", "action": "submit", "shot_id": "SH001", "backend": "user-selected-provider", "coins": 0, "cash_cny": 1.20, "note": "首镜试产"}
@@ -152,7 +218,7 @@ V1.4.1 的 `story_plan.shots[]` 还必须提供 `story_intent / obstacle / keyfr
 
 字段固定 8 个：`ts / action / shot_id / backend / coins / cash_cny / duration_sec / note`。`action ∈ submit|retry|salvage|fail_refund|fit|concat`。汇总口径见 `scripts/ledger.py`。
 
-## 6. output/verification_report.json —— 对齐三验报告（关 7/8）
+## 7. output/verification_report.json —— 对齐三验报告（关 7/8）
 
 ```json
 {

@@ -11,10 +11,12 @@ try:
     from .visual_development import require as require_development, fingerprint, shot_fingerprint
     from .visual_assets import require_keyframe
     from .gate_checks import check_storyboard, check_prompt
+    from .omni_reference import build_omni_reference_blueprint
 except ImportError:
     from visual_development import require as require_development, fingerprint, shot_fingerprint
     from visual_assets import require_keyframe
     from gate_checks import check_storyboard, check_prompt
+    from omni_reference import build_omni_reference_blueprint
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -35,12 +37,15 @@ def relative_window(shot: dict, chapter_start: float) -> str:
     return f"{start:05.2f}-{end:05.2f}"
 
 
-def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: str) -> dict:
+def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: str,
+                    has_character_reference: bool = True) -> dict:
     chapter_start = float(chapter["window"]["start"])
     shots = [prompt_map[sid] for sid in chapter["shot_ids"]]
     continuity = chapter.get("continuity_lock", {})
+    chapter_shots = {item.get("id"): item for item in chapter.get("shot_deltas", [])}
     beats = []
-    for shot in shots:
+    first_keyframe_index = 2 if has_character_reference else 1
+    for shot_index, shot in enumerate(shots, first_keyframe_index):
         meta = shot["meta"]
         direction = shot.get("direction", {})
         method = direction.get("method", {})
@@ -60,8 +65,13 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
                 f"edit_trigger={bool(direction.get('edit_trigger'))}"
             )
         lip = bool(meta.get("lip_sync"))
+        start_sec = round(float(meta["window"]["start"]) - chapter_start, 10)
+        end_sec = round(float(meta["window"]["end"]) - chapter_start, 10)
+        chapter_shot = chapter_shots.get(meta["shot_id"], {})
         beats.append({
             "time": relative_window(shot, chapter_start),
+            "start_sec": start_sec,
+            "end_sec": end_sec,
             "shot_id": meta["shot_id"],
             "story_change": shot["story"]["shot_delta"],
             "current_action": shot["performance"].splitlines()[0],
@@ -76,14 +86,35 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
                 else "非演唱镜头；嘴唇自然闭合，不跟随人声开合"
             ),
             "cut_reason": direction["edit_trigger"],
+            "cut_relation": chapter_shot.get("cut_relation", ""),
+            "editorial_role": chapter_shot.get("editorial_role", ""),
             "motion_design": shot.get("motion_design", {}),
             "visual_rules": shot.get("visual_rules", []),
             "continuity": shot.get("continuity", {}),
+            "keyframe_handle": f"@图片 {shot_index}",
         })
 
+    reference_lines = []
+    if has_character_reference:
+        reference_lines.append(
+            "@图片 1：只参考同一人物的五官比例、发型、耳饰与服装构造；"
+            "不参考背景、姿势、构图和灯光。"
+        )
+    reference_lines.extend(
+        f"{beat['keyframe_handle']}：只参考 {beat['shot_id']} 的构图起点、人物站位与场景地理；"
+        + ("人物身份和服装仍服从 @图片 1。" if has_character_reference else
+           "不得从该构图参考虚构固定人物身份。")
+        for beat in beats
+    )
     lines = [
         f"模型中立的 {aspect_ratio} 写实叙事音乐 MV 章节制作包。参考图只负责已声明的身份、服装或场景职责；不得继承未授权的构图、背景或灯光。",
+        "本章是生成包，不是一个长镜头。每个定时段都是独立剪辑镜头；必须按切点改变机位、景别或观看对象，不得用同一场景连续运动替代多镜覆盖。",
         "后端名称、请求模式、参数字段和音频绑定方式均由用户选定后，再由外部适配层按实测契约编译；本提示词不假设任何平台能力。",
+        "",
+        "【全能参考素材职责】",
+        *reference_lines,
+        "@音频 1：只参考本章表演节奏、演唱进入点和切点；不得改编、重唱或替换最终母带。",
+        "所有参考均按上述职责使用，不得把一张素材的全部画面属性扩散到其他镜头。",
         "",
         "【本章叙事弧】",
         f"开始状态：{shots[0]['story']['before']}",
@@ -105,6 +136,7 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
             f"- 变化：{beat['story_change']}",
             f"- 表演：{beat['current_action']}",
             f"- 空间：{beat['space_and_blocking']}",
+            f"- 构图起点参考：{beat['keyframe_handle']}；只取本镜构图、站位和场景关系",
             f"- 人物与服装锁：{beat['character_and_wardrobe']}",
             f"- 观看：{beat['camera_witness']}",
             f"- 意图与阻力：{beat['scene_master']['story_intent']}；{beat['scene_master']['obstacle']}",
@@ -121,6 +153,8 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
             f"- 物理：{beat['motion_physics']}",
             f"- 声画意图：{beat['performance_audio_intent']}",
             f"- 切点：{beat['cut_reason']}",
+            f"- 剪辑关系：{beat['cut_relation'] or ('章节结束' if beat is beats[-1] else '未定义')}",
+            f"- 剪辑职责：{beat['editorial_role'] or '保持本镜叙事职责'}",
             "- 动作起止与过程：" + json.dumps(beat["motion_design"], ensure_ascii=False),
             "- 连续性变化：" + json.dumps(beat["continuity"], ensure_ascii=False),
             "- 相关参考视觉规律：" + "；".join(beat["visual_rules"]),
@@ -138,6 +172,7 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
         "format": "model-neutral",
         "backend": None,
         "beats": beats,
+        "reference_mode": "omni_reference_blueprint",
         "prompt": prompt,
         "prompt_sha256": digest(prompt),
     }
@@ -177,15 +212,32 @@ def build(project: Path) -> dict:
     out_dir = project / "prompts" / "chapters"
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs = []
+    protagonist = next(iter((project / "input").glob("protagonist.*")), None)
     for chapter in plan.get("chapters", []):
         missing = [sid for sid in chapter.get("shot_ids", []) if sid not in prompt_map]
         if missing:
             raise FileNotFoundError("缺少逐镜提示词: " + ", ".join(missing))
-        compiled = compile_chapter(chapter, prompt_map, aspect_ratio)
+        compiled = compile_chapter(
+            chapter, prompt_map, aspect_ratio,
+            has_character_reference=protagonist is not None,
+        )
         compiled["keyframe_references"] = {
             sid: {"path": frames[sid]["path"], "sha256": frames[sid]["sha256"],
-                  "roles": ["likeness", "wardrobe", "location", "composition"]}
+                  "roles": ["shot_composition", "blocking_start_state", "location_continuity"]}
             for sid in chapter["shot_ids"]}
+        protagonist_source = ({
+            "local_path": str(protagonist.relative_to(project)).replace("\\", "/"),
+            "sha256": hashlib.sha256(protagonist.read_bytes()).hexdigest(),
+        } if protagonist else None)
+        blueprint = build_omni_reference_blueprint(
+            chapter, compiled["beats"], protagonist_source=protagonist_source,
+            keyframe_sources={
+                sid: {"local_path": frames[sid]["path"], "sha256": frames[sid]["sha256"]}
+                for sid in chapter["shot_ids"]
+            },
+        )
+        compiled["omni_reference"] = blueprint
+        compiled["reference_bindings"] = blueprint["reference_bindings"]
         json_path = out_dir / f"{chapter['id']}.json"
         text_path = out_dir / f"{chapter['id']}.txt"
         json_path.write_text(json.dumps(compiled, ensure_ascii=False, indent=2) + "\n",
@@ -204,10 +256,16 @@ def build(project: Path) -> dict:
         "status": "awaiting_user_backend",
         "submission_ready": False,
         "backend": None,
+        "required_reference_mode": "omni_reference",
+        "backend_selection_policy": {
+            "provider_is_user_selected": True,
+            "model_must_support_multimodal_omni_reference": True,
+            "fallback_to_non_omni_model": False,
+        },
         "prototype_chapter": prototype,
         "chapter_packages": outputs,
         "required_user_decisions": [
-            "backend_name_and_access", "verified_schema", "duration_and_resolution_tiers",
+            "backend_name_and_access", "verified_omni_reference_schema", "duration_and_resolution_tiers",
             "audio_capability_and_binding", "concurrency", "cash_limit_cny",
         ],
         "warning": "核心流程不提交生成任务；用户选定后端并核验真实契约后，才由外部适配层编译和提交代表样片",

@@ -36,7 +36,7 @@ python scripts/render_preview.py <project_dir>
 # 6. 用户选定视频后端并核验真实契约后，显式传入该后端的时长上限
 python scripts/chapter_plan_build.py <project_dir> --max-duration <backend_limit>
 
-# 7. 准备模型中立章节资产与导演制作包；generation_manifest.json 默认不可提交
+# 7. 准备模型中立章节资产、全能参考蓝图与导演制作包；generation_manifest.json 默认不可提交
 python scripts/chapter_audio_build.py <project_dir>
 python scripts/chapter_prompt_build.py <project_dir>
 
@@ -73,6 +73,7 @@ python -m unittest discover -s tests -v
 | chapter_plan_build.py | 按视频模型最长时长聚合连续镜头，保留 Continuity Bible 与 Shot Deltas |
 | chapter_audio_build.py | 按章节窗口裁出模型中立音频资产，记录来源窗口与 SHA-256，不假设后端字段 |
 | chapter_prompt_build.py | 将 ZY Scene Master、Continuity Bible、Shot Deltas 编译为模型中立章节制作包 |
+| omni_reference.py | 构建并机检人物/关键帧/音频的全能参考职责、保留/排除项与逐镜时间轴；不调用后端 |
 | director_review_gate.py | 强制完整观看单章动态样片并分别记录技术检查与九项导演检查；批准前阻断批量生成/正式合成 |
 | stitch_chapters.py | 拼接任意用户所选后端的章节产物、修正交付画布并贴回同源母带 |
 | duration_fit.py | 时长贴合（帧网格+流复制快路径） |
@@ -95,7 +96,7 @@ Scene Master、Continuity Bible、Shot Delta 与局部修复流程。缺少 `sta
 
 交付音轨必须来自 `timeline.master_audio` 的用户原始母带。`source_audio` 可为 ASR/对齐用的 16 kHz 副本，但不得用于交付。合成直接复制可承载的原始 MP3/AAC 音频流；PCM/FLAC 等转为 ALAC 无损音轨。原采样率和声道保留，生成片段音轨不进入母带重贴版。音轨对齐 PASS 仅代表时间一致，不代表音质一致。
 
-Python 3.10+（纯标准库）、ffmpeg/ffprobe。**视频生成后端由用户提供，skill 只提问不内置**——未提供后端时流程止步于关 6 + 静帧预览成片（见 `references/api-backends.md` 后端门限）。
+Python 3.10+（纯标准库）、ffmpeg/ffprobe。**视频生成后端由用户提供，skill 只提问不内置**；但所选模型必须通过多模态全能参考能力门禁，普通文生视频、单首帧图生视频和仅角色库模式均不可用于正式生成。未提供合格后端时流程止步于关 6 + 静帧预览成片（见 `references/api-backends.md` 后端门限）。
 
 ## License
 
