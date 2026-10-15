@@ -97,15 +97,25 @@ class FiveGateFixTests(unittest.TestCase):
     def test_circular_camera_angle_checks_both_directions_and_accepts_large_change(self):
         editing = crew_bible_fixture()["editing"]
         editing["pacing_policy"]["min_shot_size_variety_per_scene"] = 1
+        music = {"tempo_class": "medium", "cues": [
+            {"id": "downbeat", "time_sec": 0.0, "kind": "downbeat", "evidence": "起拍"},
+            {"id": "accent", "time_sec": 2.0, "kind": "accent", "evidence": "重音"},
+        ]}
+        timeline = {"duration_sec": 4.0, "lines": []}
         for angles, blocked in (((179, -179), True), ((-179, 179), True), ((170, -140), False)):
             shots = []
             for index, angle in enumerate(angles):
                 crew = shot_crew_fixture(index)
                 crew["cinematography"].update(shot_size="medium", angle_deg=angle)
+                crew["editing"]["music_cue"] = ("downbeat", "accent")[index]
                 shots.append({"id": f"SH{index}", "scene_id": "gate", "crew": crew,
                               "window": {"start": index * 2, "end": index * 2 + 2}})
-            errors = validate_sequence_language(shots, editing)
-            self.assertEqual(any("30 度" in e for e in errors), blocked, angles)
+            errors = validate_sequence_language(
+                shots, editing, music_structure=music, timeline=timeline, fps=24,
+            )
+            self.assertEqual(
+                any("30 度" in e or "景别变化不能豁免" in e for e in errors), blocked, (angles, errors),
+            )
 
     def test_submission_rejects_reversed_overlapping_missing_and_nonfinite_windows(self):
         contract = {"prompt": "参考 @图片1 构图", "reference_mode": "omni_reference",

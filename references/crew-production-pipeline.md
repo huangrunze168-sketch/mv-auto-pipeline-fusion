@@ -42,11 +42,12 @@
   "hook_deadline_sec": 5.0,
   "max_hook_gap_sec": 12.0,
   "max_visual_stasis_sec": 6.0,
-  "min_shot_size_variety_per_scene": 2
+  "min_shot_size_variety_per_scene": 2,
+  "max_consecutive_near_same_angle": 2
 }
 ```
 
-数值来自歌曲结构、目标受众和导演方案，不是模型时长上限。慢歌可以使用更长镜头，但必须显式给出策略，不能因为视频模型能生成 15/30 秒就让一个镜头占满整个生成包。
+数值来自歌曲结构、目标受众和导演方案，不是模型时长上限。慢歌可以使用更长镜头，但必须显式给出策略，不能因为视频模型能生成 15/30 秒就让一个镜头占满整个生成包。项目策略可以加严；若宽于 `tempo_class`（fast/medium/slow）对应的默认 soft-max，必须同时提供 `pacing_exception.reason` 与 `evidence`。
 
 ### `development.scenes[]`
 
@@ -72,17 +73,19 @@
 
 `scripts/crew_pipeline.py` 在关 5 和章节编译前执行：
 
-- 连续三个镜头不得复用相同场景、机位、景别、高度、侧别和镜头行为。
-- 同一轴线、同一侧、同一景别的相邻镜头，机位变化不足 30° 时阻断；有意跳切必须明确 `deliberate_jump_cut + jump_cut_justification`。
+- 连续三个镜头不得复用相同场景、机位签名（含 `axis_id`、`angle_deg` 15° 分桶、`position_xy` 网格）、景别、高度、侧别和镜头行为。
+- 同一轴线、同一侧的相邻镜头，机位变化不足 30° 时阻断——**景别变化不能豁免**；有意跳切必须明确 `deliberate_jump_cut + jump_cut_justification`。
+- 同轴同侧且角度差过小的近同角度连续镜数默认 ≤2（`pacing_policy.max_consecutive_near_same_angle`，可配但受曲速 soft-max 约束）。
 - 左右侧跨越视线/动作轴时必须先用中性镜或建立镜重置，并写 `axis_reset=true`。
 - 上一镜出画方向与下一镜入画方向冲突时阻断，除非明确重置轴线。
 - 新场景第一次出现时必须建立地理，不能直接用连续碎特写让观众猜位置。
 - 相邻镜头必须同时给出上一镜 `outgoing_relation` 和下一镜 `incoming_relation`。
-- 平均镜头时长、连续慢镜头、连续相同节奏类型和开场钩子必须符合项目 `pacing_policy`。
+- `music_cue` 必须引用 `music_structure.cues[].id` 或 `song:` / `line:N:start|end` / `cue:ID` 锚点，且 cue 时间落入镜头窗口（约 1 帧容差）；缺少 `music_structure` 直接阻断。
+- 平均镜头时长等 `pacing_policy` 不得无例外地宽于曲速默认 soft-max（`music_structure.tempo_class` 或 bpm→fast/medium/slow）；放宽须 `pacing_exception.reason` + `evidence`。
 - 连续三个镜头必须产生新的视觉变化，不能只是同角度换一句歌词或重复人物坐姿。
 - 头部空间与视线空间必须是 0..1 画幅比例，焦段和色温必须是有效物理数值；禁止只写“高级电影感”。
 - 项目必须按自己的节奏策略限制钩子最大间隔和同一视觉事件持续时间。
-- 每场至少达到项目指定的景别种类；三镜以上场景还要具备 reaction/detail 与 turn/payoff 覆盖，不能只有连续正面中近景。
+- 每场至少达到项目指定的景别种类；叙事/表演场 ≥3 镜时硬性要求 establish/reestablish、action/develop、reaction/detail、turn/payoff 覆盖，不能只有连续正面中近景。
 
 机器门禁只能排除明显错误，不能证明作品好看。正式样片仍需动态观看，检查表演、音乐呼吸、构图吸引力、灯光层次、空间可读性和剪辑情绪。
 

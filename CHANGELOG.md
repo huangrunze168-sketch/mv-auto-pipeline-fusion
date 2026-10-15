@@ -1,5 +1,14 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## 2026-10-15 · P0 视听语言硬门禁（角度/覆盖/music_cue/pacing）
+
+- 修复「同角度换景别标签」绕过：30° 规则改为同轴同侧即比较，景别变化不能豁免；三连机位签名纳入 `angle_deg` 分桶、`axis_id` 与 `position_xy` 网格；近同角度连续镜数默认 ≤2。
+- 叙事/表演场 ≥3 镜强制 establish/reestablish、action/develop、reaction/detail、turn/payoff 覆盖角色（落地 BUG-64 文档约定）。
+- `music_cue` 必须对齐 `music_structure` cue id 或 song/line/cue 锚点，且时间落入镜头窗口；缺 `music_structure` 阻断。
+- `pacing_policy` 受曲速默认 soft-max 约束，放宽须 `pacing_exception`；避免无理由把平均镜长放到 6–15s。
+- 回归：同角度+景别轮换、coverage 缺失、非法 music_cue、无例外过宽 pacing。
+
+
 ## 2026-10-15 · 工作流整理与质量声明修订
 
 - 汇总审批层级、素材准入、版本比较、失败恢复、独立交付、真实媒体核验及对应回归；历史各节测试数量保留为当时记录，当前结果见current-validation-status.md。

@@ -117,7 +117,7 @@ def shot_crew_fixture(index):
         "editing": {"editorial_role": "建立空间" if first else "揭示决定",
                     "incoming_relation": "song_start" if first else "动作匹配",
                     "outgoing_relation": "动作匹配" if first else "chapter_end",
-                    "rhythm_class": "setup" if first else "turn", "music_cue": "起拍" if first else "重音",
+                    "rhythm_class": "setup" if first else "turn", "music_cue": "song:start" if first else "cue:accent",
                     "novelty_axis": "prop" if first else "viewpoint",
                     "visual_change": "纸角被风掀起" if first else "视线转向门外",
                     "geography_status": "establish" if first else "established_from_previous",
@@ -133,8 +133,11 @@ def fixture(project):
         {"index": 1, "type": "vocal", "text": "第一句", "start": 0.0, "end": 3.0},
         {"index": 2, "type": "vocal", "text": "第二句", "start": 3.0, "end": 4.0},
     ]}
-    music = {"cues": [{"id": "accent", "time_sec": 2.0,
-                       "kind": "accent", "evidence": "测试音乐重音"}]}
+    music = {"tempo_class": "medium", "cues": [
+        {"id": "downbeat", "time_sec": 0.0, "kind": "downbeat", "evidence": "开场起拍"},
+        {"id": "accent", "time_sec": 2.0, "kind": "accent", "evidence": "测试音乐重音"},
+        {"id": "mid", "time_sec": 3.5, "kind": "accent", "evidence": "中段切点"},
+    ]}
     edit = {
         "timing_status": "director_approved_final_cut",
         "director_cut_approved": True,
@@ -206,36 +209,160 @@ class VisualWorkflowTests(unittest.TestCase):
             ]
             storyboard["shots"][0]["crew"]["cinematography"]["headroom"] = 1.4
             storyboard["shots"][0]["crew"]["lighting"]["color_temp_k"] = 25000
-            errors = validate_crew_pipeline(development, storyboard)
+            errors = validate_crew_pipeline(development, storyboard, project=project)
             self.assertTrue(any("lighting->cinematography" in error for error in errors))
             self.assertTrue(any("headroom" in error for error in errors))
             self.assertTrue(any("color_temp_k" in error for error in errors))
 
+    def _music_ctx(self):
+        return {
+            "tempo_class": "medium",
+            "cues": [
+                {"id": "downbeat", "time_sec": 0.0, "kind": "downbeat", "evidence": "起拍"},
+                {"id": "accent", "time_sec": 2.0, "kind": "accent", "evidence": "重音"},
+                {"id": "mid", "time_sec": 4.0, "kind": "accent", "evidence": "中段"},
+                {"id": "late", "time_sec": 6.0, "kind": "accent", "evidence": "后段"},
+            ],
+        }, {"duration_sec": 8.0, "lines": [
+            {"index": 1, "start": 0.0, "end": 3.0, "text": "一"},
+            {"index": 2, "start": 3.0, "end": 8.0, "text": "二"},
+        ]}, 24.0
+
     def test_attention_refresh_and_coverage_roles_are_enforced(self):
         editing = crew_bible_fixture()["editing"]
+        # 保持不放宽默认 pacing；用短镜与足够 hook 专门测覆盖角色与视觉停滞
         editing["pacing_policy"].update(
-            max_average_shot_sec=10, slow_shot_threshold_sec=20,
-            max_hook_gap_sec=3, max_visual_stasis_sec=4,
-            min_shot_size_variety_per_scene=2,
+            max_average_shot_sec=3.0, slow_shot_threshold_sec=4.0,
+            max_hook_gap_sec=3.0, max_visual_stasis_sec=3.0,
+            min_shot_size_variety_per_scene=2, hook_deadline_sec=2.0,
         )
+        music, timeline, fps = self._music_ctx()
+        cues = ["downbeat", "accent", "mid"]
         shots = []
         for index in range(3):
-            crew = shot_crew_fixture(index)
+            crew = shot_crew_fixture(0 if index == 0 else 1)
             crew["editing"].update(
                 hook=index == 0, visual_change="人物仍坐在桌前", coverage_role="develop",
                 geography_status="establish" if index == 0 else "established_from_previous",
+                music_cue=cues[index],
+                incoming_relation="song_start" if index == 0 else "cut",
+                outgoing_relation="cut" if index < 2 else "chapter_end",
             )
-            crew["cinematography"]["shot_size"] = "medium" if index < 2 else "close"
-            crew["cinematography"]["viewpoint_id"] = f"view-{index}"
-            crew["cinematography"]["angle_deg"] = index * 35
+            crew["cinematography"].update(
+                shot_size="medium" if index < 2 else "close",
+                viewpoint_id=f"view-{index}",
+                angle_deg=index * 40,
+                position_xy=[index * 0.3, 0.5],
+            )
             shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
                           "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
                           "crew": crew})
-        errors = validate_sequence_language(shots, editing)
-        self.assertTrue(any("钩子间隔" in error for error in errors))
-        self.assertTrue(any("相同视觉事件持续" in error for error in errors))
-        self.assertFalse(any("reaction/detail" in error for error in errors))
-        self.assertFalse(any("turn/payoff" in error for error in errors))
+        scenes = [{"id": "gate", "kind": "narrative"}]
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps, scenes=scenes,
+        )
+        self.assertTrue(any("钩子间隔" in error for error in errors), errors)
+        self.assertTrue(any("相同视觉事件持续" in error for error in errors), errors)
+        self.assertTrue(any("reaction/detail" in error for error in errors), errors)
+        self.assertTrue(any("turn/payoff" in error for error in errors), errors)
+
+    def test_same_angle_with_shot_size_cycle_is_blocked(self):
+        """同 angle_deg=0、同侧、景别 medium/close/medium 必须失败（P0）。"""
+        editing = crew_bible_fixture()["editing"]
+        music, timeline, fps = self._music_ctx()
+        sizes = ("medium", "close", "medium")
+        cues = ("downbeat", "accent", "mid")
+        shots = []
+        for index, size in enumerate(sizes):
+            crew = shot_crew_fixture(0)
+            crew["cinematography"].update(
+                viewpoint_id="front_table", shot_size=size, camera_side="left",
+                angle_deg=0, axis_id="door_axis", position_xy=[0.2, 0.5],
+                camera_height="eye", lens_behavior="prime",
+            )
+            crew["editing"].update(
+                hook=index == 0, coverage_role=("establish", "develop", "reaction")[index],
+                geography_status="establish" if index == 0 else "established_from_previous",
+                music_cue=cues[index], visual_change=f"变化{index}",
+                rhythm_class=f"r{index}",
+                incoming_relation="song_start" if index == 0 else "cut",
+                outgoing_relation="cut" if index < 2 else "chapter_end",
+            )
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
+                          "crew": crew})
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertTrue(any("30 度" in e or "景别变化不能豁免" in e for e in errors), errors)
+        self.assertTrue(any("近同角度连续" in e for e in errors), errors)
+
+    def test_music_cue_must_align_to_structure_anchors(self):
+        editing = crew_bible_fixture()["editing"]
+        music, timeline, fps = self._music_ctx()
+        shots = []
+        for index in range(2):
+            crew = shot_crew_fixture(index)
+            crew["editing"]["music_cue"] = "起拍"  # 非锚点自由文本
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
+                          "crew": crew})
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+        )
+        self.assertTrue(any("music_cue" in e and "未引用" in e for e in errors), errors)
+        errors_missing = validate_sequence_language(shots, editing)
+        self.assertTrue(any("缺少 music_structure" in e for e in errors_missing), errors_missing)
+
+    def test_loose_pacing_without_exception_is_blocked(self):
+        editing = crew_bible_fixture()["editing"]
+        editing["pacing_policy"].update(
+            max_average_shot_sec=15.0, slow_shot_threshold_sec=20.0,
+            max_consecutive_slow_shots=10, max_hook_gap_sec=40.0,
+            max_visual_stasis_sec=40.0,
+        )
+        music = {"tempo_class": "medium", "cues": [
+            {"id": f"c{i}", "time_sec": float(i * 6), "kind": "accent", "evidence": f"切点{i}"}
+            for i in range(4)
+        ]}
+        timeline = {"duration_sec": 24.0, "lines": []}
+        fps = 24.0
+        roles = ("establish", "develop", "reaction", "turn")
+        shots = []
+        for index in range(4):
+            crew = shot_crew_fixture(0 if index == 0 else 1)
+            crew["cinematography"].update(
+                angle_deg=index * 40, viewpoint_id=f"v{index}",
+                shot_size=("wide", "medium", "close", "wide")[index], position_xy=[index, 0.0],
+            )
+            crew["editing"].update(
+                hook=index == 0, music_cue=f"c{index}",
+                coverage_role=roles[index],
+                visual_change=f"v{index}", rhythm_class=f"r{index}",
+                geography_status="establish" if index == 0 else "established_from_previous",
+                incoming_relation="song_start" if index == 0 else "cut",
+                outgoing_relation="cut" if index < 3 else "chapter_end",
+            )
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * 6.0, "end": (index + 1) * 6.0},
+                          "crew": crew})
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertTrue(any("超过曲速默认" in e for e in errors), errors)
+        # 无例外时即使策略写了 15s，生效上限仍是默认 3.5，平均 6s 也会被挡
+        self.assertTrue(any("平均镜头时长" in e for e in errors), errors)
+        editing["pacing_exception"] = {
+            "reason": "慢板叙事长镜", "evidence": "副歌段 24s 内信息密度低，导演批准",
+        }
+        errors_ok_policy = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertFalse(any("超过曲速默认" in e for e in errors_ok_policy), errors_ok_policy)
+        self.assertFalse(any("平均镜头时长" in e for e in errors_ok_policy), errors_ok_policy)
 
     def test_film_grammar_profile_is_anonymous_and_requires_enough_films_for_enforcement(self):
         records = []
@@ -289,6 +416,7 @@ class VisualWorkflowTests(unittest.TestCase):
 
     def test_crew_pipeline_blocks_three_repeated_angles_and_broken_blocking(self):
         editing = crew_bible_fixture()["editing"]
+        music, timeline, fps = self._music_ctx()
         shots = []
         for index in range(3):
             crew = shot_crew_fixture(0)
@@ -299,16 +427,21 @@ class VisualWorkflowTests(unittest.TestCase):
                 outgoing_relation="same_angle_cut" if index < 2 else "chapter_end",
                 rhythm_class="same",
                 visual_change="人物仍坐在桌前",
+                music_cue=("downbeat", "accent", "mid")[index],
+                coverage_role=("establish", "develop", "reaction")[index],
             )
             crew["blocking"]["entry_direction"] = "right_to_left" if index == 1 else "left_to_right"
             shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
                           "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
                           "crew": crew})
-        errors = validate_sequence_language(shots, editing)
-        self.assertTrue(any("连续三个同角度" in error for error in errors))
-        self.assertTrue(any("人物动线跳变" in error for error in errors))
-        self.assertTrue(any("30 度" in error for error in errors))
-        self.assertTrue(any("没有新的视觉变化" in error for error in errors))
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertTrue(any("连续三个同角度" in error for error in errors), errors)
+        self.assertTrue(any("人物动线跳变" in error for error in errors), errors)
+        self.assertTrue(any("30 度" in error or "景别变化不能豁免" in error for error in errors), errors)
+        self.assertTrue(any("没有新的视觉变化" in error for error in errors), errors)
 
     def test_director_style_cannot_precede_film_grammar(self):
         development = {"crew_bible": crew_bible_fixture(), "scenes": [{
@@ -323,8 +456,14 @@ class VisualWorkflowTests(unittest.TestCase):
         shot = {"id": "SH001", "scene_id": "gate", "window": {"start": 0.0, "end": 2.0},
                 "crew": shot_crew_fixture(0)}
         development["crew_bible"]["directing"]["style_application_order"] = "style_first"
-        errors = validate_crew_pipeline(development, {"shots": [shot]})
-        self.assertTrue(any("导演风格只能" in error for error in errors))
+        music = {"tempo_class": "medium", "cues": [
+            {"id": "downbeat", "time_sec": 0.0, "kind": "downbeat", "evidence": "起拍"}]}
+        shot["crew"]["editing"]["music_cue"] = "downbeat"
+        errors = validate_crew_pipeline(
+            development, {"shots": [shot]}, music_structure=music,
+            timeline={"duration_sec": 2.0, "lines": []},
+        )
+        self.assertTrue(any("导演风格只能" in error for error in errors), errors)
 
     def test_narrative_sample_can_mark_lipsync_not_applicable_but_not_other_checks(self):
         plan = {"production_policy": {"prototype_chapter": "CH01"},
@@ -399,7 +538,7 @@ class VisualWorkflowTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build_visual_shots(tl, music, edit, 24)
             edit["shots"][0]["end_ref"] = "cue:accent"
-            music["cues"][0]["time_sec"] = 0.001
+            next(c for c in music["cues"] if c["id"] == "accent")["time_sec"] = 0.001
             with self.assertRaises(ValueError):
                 build_visual_shots(tl, music, edit, 24)
 
@@ -441,11 +580,11 @@ class VisualWorkflowTests(unittest.TestCase):
             project = Path(tmp)
             _, _, _, dev, style = fixture(project)
             sb = build(project)
-            self.assertEqual(validate(dev, sb, style), [])
+            self.assertEqual(validate(dev, sb, style, project), [])
             sb["shots"][1]["state_before"] = {"phase": 0}
             dev["references"] = [{"id": "person", "kind": "character",
                                   "roles": ["likeness", "wardrobe", "lighting"], "observed_scope": "图"}]
-            errors = validate(dev, sb, style)
+            errors = validate(dev, sb, style, project)
             self.assertTrue(any("静默重置" in e for e in errors))
             self.assertTrue(any("只能控制" in e for e in errors))
 
@@ -463,12 +602,12 @@ class VisualWorkflowTests(unittest.TestCase):
                 shot["director_decisions"] = {"composition_space": {
                     "instruction": "门柱、人物与道路层次可读", "reason": "决定是否出关",
                     "observable_check": "观众能读懂门内外关系"}}
-            self.assertEqual(validate(dev, sb, style), [])
+            self.assertEqual(validate(dev, sb, style, project), [])
             style["director_ref"].update(active_axes=["composition_space"], active_traits=["门槛"])
             method = compile_director_method(style, sb["shots"][0])
             self.assertEqual(method["axis_status"]["light_contrast"], "preserved")
             dev["director"]["source_sha256"] = "old"
-            self.assertTrue(any("指纹" in e for e in validate(dev, sb, style)))
+            self.assertTrue(any("指纹" in e for e in validate(dev, sb, style, project)))
 
     def test_changed_scene_master_invalidates_only_dependent_keyframe(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
