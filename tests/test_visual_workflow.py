@@ -342,6 +342,79 @@ class VisualWorkflowTests(unittest.TestCase):
         self.assertFalse(any("站位未承接" in e for e in errors), errors)
         self.assertFalse(any("crossing_rule" in e for e in errors), errors)
 
+
+    def test_noncontinuous_time_relation_requires_evidence(self):
+        editing = crew_bible_fixture()["editing"]
+        music, timeline, fps = self._music_ctx()
+        shots = []
+        for index in range(2):
+            crew = shot_crew_fixture(index)
+            crew["editing"].update(
+                hook=index == 0, music_cue=("downbeat", "accent")[index],
+                geography_status="establish" if index == 0 else "established_from_previous",
+                coverage_role=("establish", "turn")[index],
+                time_relation="ellipsis" if index == 1 else "continuous",
+                incoming_relation="song_start" if index == 0 else "cut",
+                outgoing_relation="cut" if index == 0 else "chapter_end",
+            )
+            crew["cinematography"].update(angle_deg=0 if index == 0 else 45, position_xy=[0, 1])
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
+                          "crew": crew})
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertTrue(any("time_relation_evidence" in e for e in errors), errors)
+        shots[1]["crew"]["editing"]["time_relation_evidence"] = "回忆插入，动作不承接"
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertFalse(any("time_relation_evidence" in e for e in errors), errors)
+
+    def test_direction_reverse_requires_evidence_not_bare_bool(self):
+        editing = crew_bible_fixture()["editing"]
+        music, timeline, fps = self._music_ctx()
+        shots = []
+        for index in range(2):
+            crew = shot_crew_fixture(index)
+            crew["editing"].update(
+                hook=index == 0, music_cue=("downbeat", "accent")[index],
+                geography_status="establish" if index == 0 else "established_from_previous",
+                coverage_role=("establish", "turn")[index],
+                time_relation="continuous",
+                incoming_relation="song_start" if index == 0 else "cut",
+                outgoing_relation="cut" if index == 0 else "chapter_end",
+            )
+            crew["cinematography"].update(angle_deg=0 if index == 0 else 40, position_xy=[0, 1])
+            crew["blocking"].update(
+                entry_direction="left_to_right", exit_direction="left_to_right",
+                screen_direction="left_to_right" if index == 0 else "right_to_left",
+                eyeline_vector="右上方门外" if index == 0 else "左下方室内",
+                start_mark="桌内侧", end_mark="桌内侧",
+                crossing_rule="同场连续",
+                direction_reverse_justified=True,  # 旧绕过字段，不应再豁免
+                eyeline_reverse_justified=True,
+            )
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
+                          "crew": crew})
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertTrue(any("direction_reverse_evidence" in e for e in errors), errors)
+        self.assertTrue(any("eyeline_reverse_evidence" in e for e in errors), errors)
+        shots[1]["crew"]["blocking"]["direction_reverse_evidence"] = "人物转身回看门内"
+        shots[1]["crew"]["blocking"]["eyeline_reverse_evidence"] = "视线落到钥匙托盘"
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertFalse(any("direction_reverse_evidence" in e for e in errors), errors)
+        self.assertFalse(any("eyeline_reverse_evidence" in e for e in errors), errors)
+
     def test_novelty_axis_and_visual_change_code_are_controlled(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
             project = Path(tmp)

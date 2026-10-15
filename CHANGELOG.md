@@ -1,5 +1,10 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## 2026-10-15 · P3 堵动线豁免洞：time_relation / 反向须证据
+
+- 非 `continuous` 的 `time_relation` 必须写 `time_relation_evidence`，禁止用 ellipsis/flashback 静默跳过同场动线核验。
+- `screen_direction` / `eyeline` 有意反向须 `direction_reverse_evidence` / `eyeline_reverse_evidence` 非空字符串；裸布尔 `*_justified=true` 不再豁免。
+
 ## 2026-10-15 · P2 动线/注意力指纹/人物禁词 + 批量审片硬依赖
 
 - G4：同场 continuous 比对 `screen_direction` / `eyeline_vector` 象限反向；static/口型站桩须 `crossing_rule` + `end_mark→start_mark` 站位承接。
