@@ -407,11 +407,58 @@ class PipelineTests(unittest.TestCase):
 
     def test_preview_distributes_scene_assets_by_chapter(self):
         scenes = [Path(f"scene_{i}.png") for i in range(4)]
-        selected = [resolve_visual_asset(Path("."), {}, i, 8, scenes, None).name
+        selected = [resolve_visual_asset(Path("."), {}, i, 8, scenes, None)[0].name
                     for i in range(8)]
         self.assertEqual(selected, ["scene_0.png", "scene_0.png", "scene_1.png",
                                     "scene_1.png", "scene_2.png", "scene_2.png",
                                     "scene_3.png", "scene_3.png"])
+
+    def test_preview_prefers_shot_keyframe_then_scene_master(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            files = {
+                "protagonist.png": b"p",
+                "master-hotel-native.png": b"h",
+                "cage-keyframe-reviewed.png": b"c",
+                "keyframe-SH001-native-reviewed.png": b"k1",
+                "scene_pool.png": b"sp",
+            }
+            for name, body in files.items():
+                (input_dir / name).write_bytes(body)
+            images = sorted(input_dir.iterdir())
+            scenes = [p for p in images if p.stem.startswith("scene_")]
+            fallback = input_dir / "protagonist.png"
+
+            path, via = resolve_visual_asset(
+                root, {"id": "SH001", "scene_id": "cage"}, 0, 4, scenes, fallback, images,
+            )
+            self.assertEqual(path.name, "keyframe-SH001-native-reviewed.png")
+            self.assertTrue(via.startswith("shot_keyframe:"))
+
+            path, via = resolve_visual_asset(
+                root, {"id": "SH010", "scene_id": "hotel"}, 1, 4, scenes, fallback, images,
+            )
+            self.assertEqual(path.name, "master-hotel-native.png")
+            self.assertTrue(via.startswith("scene_match:"))
+
+            path, via = resolve_visual_asset(
+                root, {"id": "SH020", "scene_id": "cage"}, 2, 4, scenes, fallback, images,
+            )
+            self.assertEqual(path.name, "cage-keyframe-reviewed.png")
+
+            path, via = resolve_visual_asset(
+                root, {"id": "SH030", "scene_id": "pool"}, 3, 4, scenes, fallback, images,
+            )
+            self.assertEqual(path.name, "scene_pool.png")
+
+            path, via = resolve_visual_asset(
+                root, {"id": "SH099", "scene_id": "unknown"}, 0, 1, [], fallback, images,
+            )
+            self.assertEqual(path.name, "protagonist.png")
+            self.assertTrue(via.startswith("fallback:"))
 
     def test_chapter_plan_respects_model_duration(self):
         shots = [

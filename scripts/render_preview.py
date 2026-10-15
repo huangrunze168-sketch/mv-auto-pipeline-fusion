@@ -3,9 +3,13 @@
 """
 render_preview.py — 静帧预览成片（无视频生成 API 时的全链产出）
 
-每镜：优先按时间章节选择 input/scene_*.png，多场景分别做 Ken Burns 运镜；
-  没有场景关键帧时才回退主人公图（zoompan 按窗口帧数渲染，画面轨无音轨）
-  → duration_fit 贴合窗口长 → concat 拼接 → 原曲母带重贴音轨。
+每镜视觉资产解析优先级：
+  1) shot.visual_asset
+  2) input/keyframe-{SHOT_ID}*
+  3) 按 scene_id：master-{scene}* / {scene}-keyframe* / scene_{scene}*
+  4) 无匹配时再按时间把 scene_* 均匀分配
+  5) 最后才回退 protagonist（日志会写明 via=，避免静默全用主角）
+  → Ken Burns → duration_fit → concat → 母带重贴。
 窗口已帧吸附（storyboard_build），故贴合步为恒等操作，合计严格=全曲长。
 
 这不是正式成片：口型镜在预览里同样无口型，仅用于验证时间轴/分镜/对齐链路。
@@ -49,20 +53,70 @@ def resolve_audio(proj: Path, timeline: dict) -> Path:
     return resolve_master(proj, timeline)
 
 
+
+def list_input_images(proj: Path) -> list[Path]:
+    input_dir = proj / "input"
+    if not input_dir.is_dir():
+        return []
+    return sorted(
+        p for p in input_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
+def _first_stem_prefix(images: list[Path], *prefixes: str) -> Path | None:
+    lowered = [(p, p.stem.lower()) for p in images]
+    for prefix in prefixes:
+        prefix = prefix.lower()
+        hits = [p for p, stem in lowered if stem.startswith(prefix)]
+        if hits:
+            return sorted(hits, key=lambda p: p.name.lower())[0]
+    return None
+
+
 def resolve_visual_asset(proj: Path, shot: dict, index: int, total: int,
-                         scene_assets: list, fallback: Path):
-    """显式逐镜资产优先；否则把 scene_* 按时间章节均匀分配给分镜。"""
+                         scene_assets: list, fallback: Path | None,
+                         images: list[Path] | None = None):
+    """按优先级解析预览静帧；返回 (path_or_None, via_reason)。
+
+    兼容旧调用：仅关心 path 时可取返回值[0]。scene_assets 时间分配保留为
+    无逐镜/场景匹配时的回退。
+    """
+    images = list(images) if images is not None else list_input_images(proj)
+    shot_id = str(shot.get("id") or "").strip()
+    scene_id = str(shot.get("scene_id") or "").strip()
+
     declared = shot.get("visual_asset")
     if declared:
         candidate = Path(declared)
         candidate = candidate if candidate.is_absolute() else proj / candidate
         if not candidate.is_file():
-            raise FileNotFoundError(f"{shot.get('id')} visual_asset 不存在: {candidate}")
-        return candidate
+            raise FileNotFoundError(f"{shot_id or 'shot'} visual_asset 不存在: {candidate}")
+        return candidate, "visual_asset"
+
+    if shot_id:
+        keyframe = _first_stem_prefix(images, f"keyframe-{shot_id}")
+        if keyframe is not None:
+            return keyframe, f"shot_keyframe:{keyframe.name}"
+
+    if scene_id:
+        scene_match = _first_stem_prefix(
+            images,
+            f"master-{scene_id}",
+            f"{scene_id}-keyframe",
+            f"scene_{scene_id}",
+        )
+        if scene_match is not None:
+            return scene_match, f"scene_match:{scene_match.name}"
+
     if scene_assets:
         phase = min(len(scene_assets) - 1, index * len(scene_assets) // max(1, total))
-        return scene_assets[phase]
-    return fallback
+        chosen = scene_assets[phase]
+        return chosen, f"scene_time_bucket:{chosen.name}"
+
+    if fallback is not None:
+        return fallback, f"fallback:{fallback.name}"
+    return None, "color_placeholder"
 
 
 def main():
@@ -103,11 +157,13 @@ def main():
     if last_frames < 1:
         raise ValueError("分镜窗口换算后的总帧数无效，请先重新运行 storyboard_build.py")
     Ds.append(last_frames)
-    images = sorted(p for p in (proj / "input").iterdir()
-                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+    images = list_input_images(proj)
     protagonist = sorted(p for p in images if p.stem.lower() == "protagonist")
-    img = protagonist[0] if protagonist else (images[0] if images else None)
+    img = protagonist[0] if protagonist else None
     scene_assets = sorted(p for p in images if p.stem.lower().startswith("scene_"))
+    if img is None and not scene_assets and images:
+        # 无主角、无 scene_* 时仍保留一张底图，避免整链中断；via= 会标明 fallback
+        img = images[0]
     audio = resolve_audio(proj, timeline)
     clips = proj / "clips"
     out_dir = proj / "output"
@@ -120,9 +176,11 @@ def main():
         dur = w["end"] - w["start"]
         D = Ds[i]
         zt, xt, yt = PRESETS[i % len(PRESETS)]
-        shot_img = resolve_visual_asset(proj, s, i, len(shots), scene_assets, img)
+        shot_img, via = resolve_visual_asset(
+            proj, s, i, len(shots), scene_assets, img, images=images,
+        )
         print(f"[render] {s['id']} D={D} preset={i % len(PRESETS)} "
-              f"asset={shot_img.name if shot_img else 'color'}", flush=True)
+              f"asset={shot_img.name if shot_img else 'color'} via={via}", flush=True)
         # BUG-10 修法：三个表达式都要做 {D} 替换（此前只替换了 z，x/y 的 {D} 原样进 ffmpeg）
         zt, xt, yt = (e.format(D=D) for e in (zt, xt, yt))
         # 参考图只锁人物，不得为适配画布而改变五官与服装比例。先做等比前景，

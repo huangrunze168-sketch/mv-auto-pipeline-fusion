@@ -1,5 +1,8 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## 2026-10-15 · 预览静帧资产解析：关键帧/场景母版优先于主角图
+
+- `render_preview.resolve_visual_asset`：`visual_asset` → `keyframe-{SHOT_ID}*` → `master-{scene}*` / `{scene}-keyframe*` / `scene_{scene}*` → 时间桶 `scene_*` → `protagonist`；日志输出 `via=`，避免静默全用主角设定图。
 ## 2026-10-15 · P1 灯光/舞美硬约束 + ZY 可机检增量
 
 - 灯光与场景美术字段禁空泛审美子串（电影感/唯美/大片/高级感/氛围感等）；`key_direction` 改为受控方位枚举，保留色温 1000–20000K。
