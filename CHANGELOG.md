@@ -1,5 +1,12 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## 2026-10-15 · P1 灯光/舞美硬约束 + ZY 可机检增量
+
+- 灯光与场景美术字段禁空泛审美子串（电影感/唯美/大片/高级感/氛围感等）；`key_direction` 改为受控方位枚举，保留色温 1000–20000K。
+- `topology` 必须为含 `nodes[]` 的可搭建结构（entrance/exit + barrier/landmark/mark），节点可挂 `axis_id`，并与逐镜 `blocking.start_mark/end_mark` 交叉引用。
+- 有 `director_ref` / `development.director` 时保留 SHA+轴完整性，并要求可机检 `crew_constraints`（`exposure_bias` / `camera_height_policy`）对齐到镜头 lighting/cinematography；无导演仍可出片；基础 grammar 未过时制作桌 `eligible_for_routing=false`。
+- 依赖 P0 视听语言硬门禁分支；回归覆盖空泛灯光、拓扑交叉引用、导演约束正反例。
+
 ## 2026-10-15 · P0 视听语言硬门禁（角度/覆盖/music_cue/pacing）
 
 - 修复「同角度换景别标签」绕过：30° 规则改为同轴同侧即比较，景别变化不能豁免；三连机位签名纳入 `angle_deg` 分桶、`axis_id` 与 `position_xy` 网格；近同角度连续镜数默认 ≤2。

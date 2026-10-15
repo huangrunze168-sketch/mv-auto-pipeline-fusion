@@ -89,3 +89,13 @@ Story Visual Development 编写 `state/story_plan.json`，再运行一次 `story
 ## 六、许可与来源
 
 `vendor/zy-cinematic-realism/` 保留上游原始 `LICENSE`、`NOTICE.md` 和文件级版权头，采用 CC BY-NC 4.0。该目录的非商业限制不因被放入本仓库而改变；商业项目使用前应另行取得上游作者授权。
+
+
+## 七、P1：导演风格后置于语法，并落到可机检 crew 增量
+
+1. `crew_bible.directing.style_application_order` 固定为 `after_film_grammar`；`crew_rehearsal` 在结构错误时将 `director_stylization.eligible_for_routing` 设为 false，禁止先套导演再补基础镜头。
+2. 无 `style.director_ref.name` 时不注入导演方法，项目仍可出片。
+3. 有导演时继续核验 `source_file` + `source_sha256` + 激活轴/`director_decisions`；并额外要求 `development.director.crew_constraints`：
+   - `exposure_bias`：`protect_highlights` / `protect_faces` / `broad_midtones` / `practical_adaptation` / `dense_blacks` / `neutral`
+   - `camera_height_policy`：`eye_level` / `low` / `high` / `grounded_threshold` / `participant` / `sit_eye_level`
+4. 上述约束必须写进逐镜 `crew.lighting.exposure_bias` 与 `crew.cinematography.height_strategy`，与 ZY 卡中的曝光/机位高度指纹对应；不得用导演姓名或空泛“电影感”代替。
