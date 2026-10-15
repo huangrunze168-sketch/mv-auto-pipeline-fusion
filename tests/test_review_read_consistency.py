@@ -41,6 +41,11 @@ class ReviewReadConsistency(unittest.TestCase):
                 record[key] = {name: {'status': 'pass', 'evidence': '隔离测试证据'} for name in record[key]}
             record['timecoded_findings'] = [{'start_sec': 0, 'end_sec': 4,
                                             'dimension': 'editing', 'observation': '测试'}]
+            record['crew_emotion_pull'] = {
+                'source': 'unit-test',
+                'segments': [{'start_sec': 0.0, 'end_sec': 4.0, 'verdict': 'KEEP',
+                              'reason': '隔离测试：情绪保留'}],
+            }
             record['batch_generation_allowed'] = True
         else:
             module = animatic

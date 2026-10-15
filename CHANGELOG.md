@@ -1,5 +1,13 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## 2026-10-15 · 剧组拉片情绪维度接入 director_review_gate
+
+- 新增导演维度 `song_emotion_match`，与设计数据/审批状态并列。
+- `validate_review` 强制读取 `crew_emotion_pull.segments`：`REGEN`/`FAIL`，或 `PARTIAL` 且 `priority` 为 P0/P1（或 `regen_required=true`）→ 审片不通过并要求重生。
+- 对标《笼》v10 拉片：建议保留 0–33 / 33–45 / 45–52 / 109–119；P0 60–90（悬崖假自由→回笼）、90–109（烛厅暖冷+双笼）及 P1 52–60 情绪不合段阻断批准。
+- 回归：`tests/test_crew_emotion_pull_gate.py`；批准路径 fixture 补 KEEP 段。
+
+
 ## 2026-10-15 · P3 收口审计剩余洞
 
 - P3.1：`creative_workflow_revision` 必须为 2；rehearsal/animatic/review 默认强制 `sequence_direction`

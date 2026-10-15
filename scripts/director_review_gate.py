@@ -30,7 +30,17 @@ DIMENSIONS = (
     "story_readability", "performance", "blocking_and_gaze", "camera_witness",
     "motion_physics", "source_light_and_material", "continuity", "editing",
     "lip_sync",
+    # 剧组拉片：画面是否匹配歌曲情绪弧/母题（与设计数据、审批状态并列）
+    "song_emotion_match",
 )
+
+# crew_emotion_pull.segments[].verdict
+CREW_EMOTION_KEEP = "KEEP"
+CREW_EMOTION_PARTIAL = "PARTIAL"
+CREW_EMOTION_REGEN = "REGEN"
+CREW_EMOTION_FAIL = "FAIL"
+CREW_EMOTION_BLOCKING = frozenset({CREW_EMOTION_REGEN, CREW_EMOTION_FAIL})
+CREW_EMOTION_PARTIAL_BLOCK_PRIORITIES = frozenset({"P0", "P1"})
 
 
 def initial_review(plan: dict) -> dict:
@@ -58,6 +68,82 @@ def initial_review(plan: dict) -> dict:
         "decision": "pending",
         "batch_generation_allowed": False,
     }
+
+
+
+def validate_crew_emotion_pull(review: dict, duration: float | None = None) -> list[str]:
+    """把剧组拉片情绪结论接入审片：情绪不合段（REGEN/FAIL，或 P0/P1 PARTIAL）阻断批准。
+
+    期望结构 review["crew_emotion_pull"]:
+      {
+        "source": "可选，如 CREW_PULL_REPORT.md",
+        "segments": [
+          {"start_sec": 60.0, "end_sec": 90.0, "verdict": "REGEN",
+           "priority": "P0", "reason": "缺悬崖假自由→回笼"}
+        ]
+      }
+    """
+    errors: list[str] = []
+    pull = review.get("crew_emotion_pull")
+    if not isinstance(pull, dict):
+        errors.append("缺少 crew_emotion_pull：剧组拉片情绪结论须作为审片输入，与设计/审批维度并列")
+        return errors
+    segments = pull.get("segments")
+    if not isinstance(segments, list) or not segments:
+        errors.append("crew_emotion_pull.segments 不能为空")
+        return errors
+    blocking_ranges: list[str] = []
+    for index, segment in enumerate(segments, 1):
+        if not isinstance(segment, dict):
+            errors.append(f"crew_emotion_pull.segments[{index}] 必须是对象")
+            continue
+        try:
+            start = float(segment.get("start_sec"))
+            end = float(segment.get("end_sec", start))
+        except (TypeError, ValueError):
+            errors.append(f"crew_emotion_pull.segments[{index}] 时间码无效")
+            continue
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < start:
+            errors.append(f"crew_emotion_pull.segments[{index}] 时间范围无效")
+            continue
+        if duration is not None and end > duration + 1e-6:
+            errors.append(
+                f"crew_emotion_pull.segments[{index}] 时间码超出样片时长 {duration}s"
+            )
+        verdict = segment.get("verdict")
+        if verdict not in {
+            CREW_EMOTION_KEEP, CREW_EMOTION_PARTIAL, CREW_EMOTION_REGEN, CREW_EMOTION_FAIL
+        }:
+            errors.append(
+                f"crew_emotion_pull.segments[{index}] verdict 无效（须 KEEP/PARTIAL/REGEN/FAIL）"
+            )
+            continue
+        reason = str(segment.get("reason", "")).strip()
+        if not reason:
+            errors.append(f"crew_emotion_pull.segments[{index}] 缺少 reason")
+        priority = str(segment.get("priority", "")).strip().upper()
+        regen_required = segment.get("regen_required")
+        if isinstance(regen_required, str):
+            regen_required = regen_required.strip().lower() in {"1", "true", "yes", "y"}
+        partial_blocks = (
+            verdict == CREW_EMOTION_PARTIAL
+            and (priority in CREW_EMOTION_PARTIAL_BLOCK_PRIORITIES or regen_required is True)
+        )
+        if verdict in CREW_EMOTION_BLOCKING or partial_blocks:
+            label = f"{start:g}–{end:g}s"
+            detail = reason or "未写原因"
+            pri = f" · {priority}" if priority else ""
+            blocking_ranges.append(f"{label} ({verdict}{pri}: {detail})")
+            errors.append(
+                f"歌曲情绪不合（须重生，审片不通过）: {label} · {verdict}{pri} · {detail}"
+            )
+    check = review.get("director_checks", {}).get("song_emotion_match", {})
+    if blocking_ranges and check.get("status") == "pass":
+        errors.append(
+            "导演维度 song_emotion_match 不能为 pass：存在情绪不合段 "
+            + "; ".join(blocking_ranges)
+        )
+    return errors
 
 
 def validate_review(review: dict, plan: dict) -> list[str]:
@@ -105,6 +191,7 @@ def validate_review(review: dict, plan: dict) -> list[str]:
         item = review.get("sequence_checks", {}).get(name, {})
         if item.get("status") != "pass" or not str(item.get("evidence", "")).strip():
             errors.append(f"段落审片未通过或缺少证据: {name}")
+    errors.extend(validate_crew_emotion_pull(review, duration))
     findings = review.get("timecoded_findings", [])
     if not findings:
         errors.append("至少需要一条 timecoded_findings，证明审片基于动态时间线")

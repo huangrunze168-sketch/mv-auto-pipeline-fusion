@@ -154,6 +154,11 @@ class FiveGateFixTests(unittest.TestCase):
         for checks in (review["director_checks"], review["sequence_checks"]):
             for item in checks.values():
                 item.update(status="pass", evidence="观察证据")
+        review["crew_emotion_pull"] = {
+            "source": "unit-test",
+            "segments": [{"start_sec": 0.0, "end_sec": 4.0, "verdict": "KEEP",
+                          "reason": "单元测试：情绪段保留"}],
+        }
         for start, end, blocked in ((0, 4, False), (999, 1000, True), (3, 5, True)):
             review["timecoded_findings"] = [{"start_sec": start, "end_sec": end,
                                             "dimension": "editing", "observation": "动作匹配"}]

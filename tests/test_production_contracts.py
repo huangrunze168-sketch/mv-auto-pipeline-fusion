@@ -166,6 +166,15 @@ class ProductionContracts(unittest.TestCase):
                              for name in names}
         review['timecoded_findings'] = [{'start_sec': 0, 'end_sec': duration, 'dimension': 'editing',
                                         'observation': '测试时间码覆盖'}]
+        review['crew_emotion_pull'] = {
+            'source': 'unit-test',
+            'segments': [{
+                'start_sec': 0.0,
+                'end_sec': float(duration),
+                'verdict': 'KEEP',
+                'reason': '单元测试：无情绪不合段',
+            }],
+        }
         write(p / 'state/director_review.json', review)
         return review
 
