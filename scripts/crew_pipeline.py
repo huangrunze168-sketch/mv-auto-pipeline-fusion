@@ -92,6 +92,59 @@ DIRECTIONS = {"left_to_right", "right_to_left", "toward_camera", "away_camera", 
 TRANSITIONS = {"hard_cut", "match_cut", "dissolve", "fade", "wipe", "whip", "black_frame"}
 AUDIO_TRANSITIONS = {"straight", "J_cut", "L_cut", "music_hit", "silence_bridge", "sound_bridge"}
 
+ANGLE_BUCKET_DEG = 15.0
+POSITION_GRID = 0.25
+NEAR_ANGLE_DEG = 30.0
+FRAME_TOLERANCE_SEC = 1.0 / 24.0
+
+COVERAGE_ESTABLISH = frozenset({"establish", "reestablish"})
+COVERAGE_ACTION = frozenset({"action", "develop"})
+COVERAGE_REACTION = frozenset({"reaction", "detail"})
+COVERAGE_TURN = frozenset({"turn", "payoff"})
+NARRATIVE_COVERAGE_KINDS = frozenset({"narrative", "performance"})
+
+TEMPO_PACING_DEFAULTS = {
+    "fast": {
+        "max_average_shot_sec": 2.5,
+        "slow_shot_threshold_sec": 3.0,
+        "max_consecutive_slow_shots": 2,
+        "max_consecutive_same_rhythm": 2,
+        "hook_deadline_sec": 3.0,
+        "max_hook_gap_sec": 8.0,
+        "max_visual_stasis_sec": 4.0,
+        "min_shot_size_variety_per_scene": 2,
+        "max_consecutive_near_same_angle": 2,
+    },
+    "medium": {
+        "max_average_shot_sec": 3.5,
+        "slow_shot_threshold_sec": 4.0,
+        "max_consecutive_slow_shots": 2,
+        "max_consecutive_same_rhythm": 2,
+        "hook_deadline_sec": 5.0,
+        "max_hook_gap_sec": 12.0,
+        "max_visual_stasis_sec": 6.0,
+        "min_shot_size_variety_per_scene": 2,
+        "max_consecutive_near_same_angle": 2,
+    },
+    "slow": {
+        "max_average_shot_sec": 5.0,
+        "slow_shot_threshold_sec": 6.0,
+        "max_consecutive_slow_shots": 3,
+        "max_consecutive_same_rhythm": 3,
+        "hook_deadline_sec": 6.0,
+        "max_hook_gap_sec": 16.0,
+        "max_visual_stasis_sec": 8.0,
+        "min_shot_size_variety_per_scene": 2,
+        "max_consecutive_near_same_angle": 2,
+    },
+}
+PACING_LOOSER_IF_GREATER = frozenset({
+    "max_average_shot_sec", "slow_shot_threshold_sec", "max_consecutive_slow_shots",
+    "max_consecutive_same_rhythm", "hook_deadline_sec", "max_hook_gap_sec",
+    "max_visual_stasis_sec", "max_consecutive_near_same_angle",
+})
+PACING_LOOSER_IF_LESSER = frozenset({"min_shot_size_variety_per_scene"})
+
 
 def _missing(data: dict[str, Any], fields: tuple[str, ...]) -> list[str]:
     return [field for field in fields if data.get(field) in (None, "", [], {})]
@@ -120,10 +173,279 @@ def _shot_duration(shot: dict[str, Any]) -> float:
     return float(window.get("end", 0)) - float(window.get("start", 0))
 
 
-def validate_crew_pipeline(development: dict[str, Any], storyboard: dict[str, Any]) -> list[str]:
+
+def _angle_bucket(angle: Any) -> int | None:
+    try:
+        value = float(angle)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return int(round(value / ANGLE_BUCKET_DEG))
+
+
+def _position_bucket(xy: Any) -> tuple[float, float] | None:
+    try:
+        x, y = float(xy[0]), float(xy[1])
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    if not math.isfinite(x) or not math.isfinite(y):
+        return None
+    return (round(x / POSITION_GRID) * POSITION_GRID, round(y / POSITION_GRID) * POSITION_GRID)
+
+
+def _circular_angle_delta(a: Any, b: Any) -> float | None:
+    try:
+        left, right = float(a), float(b)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(left) or not math.isfinite(right):
+        return None
+    return abs((left - right + 180.0) % 360.0 - 180.0)
+
+
+def _resolve_tempo_class(music_structure: dict[str, Any] | None) -> str:
+    if not music_structure:
+        return "medium"
+    raw = music_structure.get("tempo_class") or music_structure.get("tempo")
+    if isinstance(raw, str) and raw.strip().casefold() in TEMPO_PACING_DEFAULTS:
+        return raw.strip().casefold()
+    bpm = _positive_number(music_structure.get("bpm"))
+    if bpm is not None:
+        if bpm >= 120:
+            return "fast"
+        if bpm <= 80:
+            return "slow"
+    return "medium"
+
+
+def _pacing_exception_ok(editing_bible: dict[str, Any], policy: dict[str, Any]) -> bool:
+    exception = policy.get("pacing_exception") or editing_bible.get("pacing_exception") or {}
+    if not isinstance(exception, dict):
+        return False
+    reason = exception.get("reason")
+    evidence = exception.get("evidence")
+    return isinstance(reason, str) and bool(reason.strip()) and isinstance(evidence, str) and bool(evidence.strip())
+
+
+def _effective_pacing_policy(
+    editing_bible: dict[str, Any], music_structure: dict[str, Any] | None,
+) -> tuple[dict[str, Any], list[str]]:
+    """合并曲速默认 soft-max 与项目策略；放宽超过默认须 pacing_exception。"""
+    errors: list[str] = []
+    policy = editing_bible.get("pacing_policy") or {}
+    required_policy = (
+        "max_average_shot_sec", "slow_shot_threshold_sec", "max_consecutive_slow_shots",
+        "max_consecutive_same_rhythm", "hook_deadline_sec", "max_hook_gap_sec",
+        "max_visual_stasis_sec", "min_shot_size_variety_per_scene",
+    )
+    missing_policy = _missing(policy, required_policy)
+    if missing_policy:
+        errors.append("剪辑节奏策略缺少: " + ",".join(missing_policy))
+    tempo = _resolve_tempo_class(music_structure)
+    defaults = dict(TEMPO_PACING_DEFAULTS[tempo])
+    # 可选策略：近同角度连续上限；缺省用曲速默认
+    if policy.get("max_consecutive_near_same_angle") in (None, "", [], {}):
+        policy = {**policy, "max_consecutive_near_same_angle": defaults["max_consecutive_near_same_angle"]}
+    numeric_keys = required_policy + ("max_consecutive_near_same_angle",)
+    numeric = {key: _positive_number(policy.get(key)) for key in numeric_keys}
+    for key in ("max_consecutive_slow_shots", "max_consecutive_same_rhythm",
+                "min_shot_size_variety_per_scene", "max_consecutive_near_same_angle"):
+        if type(policy.get(key)) is not int:
+            numeric[key] = None
+            errors.append(f"{key}必须为正整数，拒绝布尔值与小数")
+    invalid = [key for key, value in numeric.items() if value is None]
+    if invalid and not missing_policy:
+        errors.append("剪辑节奏策略必须是正数: " + ",".join(invalid))
+    allow_looser = _pacing_exception_ok(editing_bible, policy)
+    effective: dict[str, Any] = {}
+    if not invalid:
+        for key in numeric_keys:
+            declared = numeric[key]
+            default = defaults[key]
+            if key in PACING_LOOSER_IF_GREATER and declared > default + 1e-6 and not allow_looser:
+                errors.append(
+                    f"pacing_policy.{key}={declared} 超过曲速默认 {tempo}/{default}，"
+                    "须提供 pacing_exception.reason 与 evidence"
+                )
+                effective[key] = default
+            elif key in PACING_LOOSER_IF_LESSER and declared < default - 1e-6 and not allow_looser:
+                errors.append(
+                    f"pacing_policy.{key}={declared} 低于曲速默认 {tempo}/{default}，"
+                    "须提供 pacing_exception.reason 与 evidence"
+                )
+                effective[key] = default
+            else:
+                effective[key] = declared
+        effective["tempo_class"] = tempo
+        effective["_allow_looser"] = allow_looser
+    return effective, errors
+
+
+def _music_cue_anchors(
+    music_structure: dict[str, Any], timeline: dict[str, Any] | None, fps: float,
+) -> dict[str, float]:
+    """与 storyboard_build.music_anchors 对齐：cue id、cue:ID、line:N:start/end、song:start/end。"""
+    duration = None
+    if timeline is not None:
+        try:
+            duration = float(timeline["duration_sec"])
+        except (KeyError, TypeError, ValueError):
+            duration = None
+    if duration is None:
+        times = []
+        for cue in music_structure.get("cues") or []:
+            try:
+                times.append(float(cue["time_sec"]))
+            except (KeyError, TypeError, ValueError):
+                pass
+        duration = max(times) if times else 0.0
+    anchors: dict[str, float] = {"song:start": 0.0, "song:end": float(duration)}
+    if timeline is not None:
+        for line in timeline.get("lines") or []:
+            try:
+                index = line["index"]
+                start, end = float(line["start"]), float(line["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not math.isfinite(start) or not math.isfinite(end):
+                continue
+            anchors[f"line:{index}:start"] = start
+            anchors[f"line:{index}:end"] = end
+    for cue in music_structure.get("cues") or []:
+        cue_id = cue.get("id")
+        try:
+            time_sec = float(cue["time_sec"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not isinstance(cue_id, str) or not cue_id.strip() or not math.isfinite(time_sec):
+            continue
+        anchors[cue_id] = time_sec
+        anchors[f"cue:{cue_id}"] = time_sec
+    return anchors
+
+
+def _validate_music_cues(
+    shots: list[dict[str, Any]], music_structure: dict[str, Any] | None,
+    timeline: dict[str, Any] | None, fps: float,
+) -> list[str]:
+    errors: list[str] = []
+    if music_structure is None:
+        return ["缺少 music_structure，无法核验 music_cue 对齐"]
+    if not isinstance(music_structure.get("cues"), list):
+        return ["music_structure.cues 必须为列表"]
+    try:
+        fps_value = float(fps)
+    except (TypeError, ValueError):
+        fps_value = 24.0
+    if not math.isfinite(fps_value) or fps_value <= 0:
+        fps_value = 24.0
+    tol = max(FRAME_TOLERANCE_SEC, 1.0 / fps_value)
+    anchors = _music_cue_anchors(music_structure, timeline, fps_value)
+    for shot in shots:
+        sid = shot.get("id", "unknown")
+        cue = ((shot.get("crew") or {}).get("editing") or {}).get("music_cue")
+        if not isinstance(cue, str) or not cue.strip():
+            continue  # 字段缺失由 department 检查负责
+        key = cue.strip()
+        if key not in anchors:
+            errors.append(
+                f"{sid} music_cue={key!r} 未引用 music_structure.cues[].id 或 "
+                "song:/line:/cue: 锚点"
+            )
+            continue
+        time_sec = anchors[key]
+        window = shot.get("window") or {}
+        try:
+            start, end = float(window["start"]), float(window["end"])
+        except (KeyError, TypeError, ValueError):
+            errors.append(f"{sid} 窗口无效，无法核验 music_cue 时间")
+            continue
+        if not (start - tol <= time_sec <= end + tol):
+            errors.append(
+                f"{sid} music_cue 时间 {time_sec:.3f}s 未落入镜头窗口 "
+                f"[{start:.3f},{end:.3f}]±{tol:.4f}s"
+            )
+    return errors
+
+
+def _validate_scene_coverage_roles(
+    shots: list[dict[str, Any]], scenes: list[dict[str, Any]] | None,
+) -> list[str]:
+    """叙事/表演场 ≥3 镜时强制 establish、action/develop、reaction/detail、turn/payoff。"""
+    errors: list[str] = []
+    kind_by_id = {
+        str(scene.get("id")): scene.get("kind")
+        for scene in (scenes or [])
+        if scene.get("id") not in (None, "")
+    }
+    by_scene: dict[str, list[dict[str, Any]]] = {}
+    for shot in shots:
+        by_scene.setdefault(str(shot.get("scene_id")), []).append(shot)
+    for scene_id, scene_shots in by_scene.items():
+        kind = kind_by_id.get(scene_id, "narrative")
+        if kind not in NARRATIVE_COVERAGE_KINDS or len(scene_shots) < 3:
+            continue
+        roles = {
+            ((shot.get("crew") or {}).get("editing") or {}).get("coverage_role")
+            for shot in scene_shots
+        }
+        roles.discard(None)
+        roles.discard("")
+        missing = []
+        if not roles & COVERAGE_ESTABLISH:
+            missing.append("establish/reestablish")
+        if not roles & COVERAGE_ACTION:
+            missing.append("action/develop")
+        if not roles & COVERAGE_REACTION:
+            missing.append("reaction/detail")
+        if not roles & COVERAGE_TURN:
+            missing.append("turn/payoff")
+        if missing:
+            errors.append(
+                f"场景 {scene_id}（{kind}，{len(scene_shots)} 镜）缺少覆盖角色: "
+                + ",".join(missing)
+            )
+    return errors
+
+
+def _load_json_if_exists(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def validate_crew_pipeline(
+    development: dict[str, Any],
+    storyboard: dict[str, Any],
+    *,
+    music_structure: dict[str, Any] | None = None,
+    timeline: dict[str, Any] | None = None,
+    fps: float | None = None,
+    project: Path | None = None,
+) -> list[str]:
     """返回结构与视听语言错误；空列表表示可以进入导演风格编译。"""
 
     errors: list[str] = []
+    if project is not None:
+        root = Path(project)
+        if music_structure is None:
+            music_structure = _load_json_if_exists(root / "state" / "music_structure.json")
+        if timeline is None:
+            timeline = _load_json_if_exists(root / "state" / "timeline.json")
+        if fps is None and storyboard.get("fps") is not None:
+            try:
+                fps = float(storyboard["fps"])
+            except (TypeError, ValueError):
+                fps = None
+        if fps is None and timeline is not None:
+            try:
+                fps = float(timeline.get("fps_assumed") or 24)
+            except (TypeError, ValueError):
+                fps = 24.0
+    if fps is None:
+        fps = 24.0
+
     bible = development.get("crew_bible") or {}
     if bible.get("schema_version") != 2:
         errors.append("crew_bible.schema_version 必须为 2")
@@ -250,34 +572,39 @@ def validate_crew_pipeline(development: dict[str, Any], storyboard: dict[str, An
         if editing.get("audio_transition") not in AUDIO_TRANSITIONS:
             errors.append(f"{sid} audio_transition 不在受控词表")
 
-    errors.extend(validate_sequence_language(shots, bible.get("editing") or {}))
+    errors.extend(validate_sequence_language(
+        shots, bible.get("editing") or {},
+        music_structure=music_structure, timeline=timeline, fps=fps,
+        scenes=development.get("scenes"),
+    ))
     return errors
 
 
-def validate_sequence_language(shots: list[dict[str, Any]], editing_bible: dict[str, Any]) -> list[str]:
-    """检查轴线、动线、重复机位、30 度规则、空间建立与节奏。"""
+def validate_sequence_language(
+    shots: list[dict[str, Any]],
+    editing_bible: dict[str, Any],
+    *,
+    music_structure: dict[str, Any] | None = None,
+    timeline: dict[str, Any] | None = None,
+    fps: float = 24.0,
+    scenes: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """检查轴线、动线、重复机位、30 度规则、空间建立、覆盖角色、music_cue 与节奏。"""
 
     errors: list[str] = []
     if not shots:
         return ["剧组审计没有镜头"]
 
-    policy = editing_bible.get("pacing_policy") or {}
-    required_policy = (
+    errors.extend(_validate_music_cues(shots, music_structure, timeline, fps))
+    effective, pacing_errors = _effective_pacing_policy(editing_bible, music_structure)
+    errors.extend(pacing_errors)
+    numeric = {key: effective.get(key) for key in (
         "max_average_shot_sec", "slow_shot_threshold_sec", "max_consecutive_slow_shots",
         "max_consecutive_same_rhythm", "hook_deadline_sec", "max_hook_gap_sec",
         "max_visual_stasis_sec", "min_shot_size_variety_per_scene",
-    )
-    missing_policy = _missing(policy, required_policy)
-    if missing_policy:
-        errors.append("剪辑节奏策略缺少: " + ",".join(missing_policy))
-    numeric = {key: _positive_number(policy.get(key)) for key in required_policy}
-    for key in ("max_consecutive_slow_shots", "max_consecutive_same_rhythm", "min_shot_size_variety_per_scene"):
-        if type(policy.get(key)) is not int:
-            numeric[key] = None
-            errors.append(f"{key}必须为正整数，拒绝布尔值与小数")
+        "max_consecutive_near_same_angle",
+    )}
     invalid = [key for key, value in numeric.items() if value is None]
-    if invalid and not missing_policy:
-        errors.append("剪辑节奏策略必须是正数: " + ",".join(invalid))
 
     durations = [_shot_duration(shot) for shot in shots]
     if any(not math.isfinite(value) or value <= 0 for value in durations):
@@ -324,6 +651,7 @@ def validate_sequence_language(shots: list[dict[str, Any]], editing_bible: dict[
 
     scene_established: set[str] = set()
     signatures: list[tuple[Any, ...]] = []
+    near_angle_run = 0
     for index, shot in enumerate(shots):
         sid = shot.get("id", "unknown")
         crew = shot.get("crew") or {}
@@ -341,14 +669,22 @@ def validate_sequence_language(shots: list[dict[str, Any]], editing_bible: dict[
                 scene_established.add(scene_id)
 
         signature = (
-            scene_id, camera.get("viewpoint_id"), camera.get("shot_size"),
-            camera.get("camera_height"), camera.get("camera_side"), camera.get("lens_behavior"),
+            scene_id,
+            camera.get("viewpoint_id"),
+            camera.get("shot_size"),
+            camera.get("camera_height"),
+            camera.get("camera_side"),
+            camera.get("lens_behavior"),
+            camera.get("axis_id"),
+            _angle_bucket(camera.get("angle_deg")),
+            _position_bucket(camera.get("position_xy")),
         )
         signatures.append(signature)
         if index >= 2 and signatures[index - 2] == signatures[index - 1] == signature:
             errors.append(f"{sid} 与前两镜重复同一机位/景别/高度，禁止连续三个同角度")
 
         if index == 0:
+            near_angle_run = 1
             continue
         previous = shots[index - 1]
         pcrew = previous.get("crew") or {}
@@ -383,21 +719,43 @@ def validate_sequence_language(shots: list[dict[str, Any]], editing_bible: dict[
             same_scene
             and pcamera.get("axis_id") == camera.get("axis_id")
         )
+        angle_delta = _circular_angle_delta(camera.get("angle_deg"), pcamera.get("angle_deg"))
+        if angle_delta is None:
+            angle_delta = 999.0
+        near_same_angle = (
+            same_scene_axis
+            and pcamera.get("camera_side") in {"left", "right", "center"}
+            and camera.get("camera_side") == pcamera.get("camera_side")
+            and angle_delta < NEAR_ANGLE_DEG
+            and not reset
+        )
+        if near_same_angle:
+            near_angle_run += 1
+        else:
+            near_angle_run = 1
+        if (
+            not invalid
+            and near_same_angle
+            and near_angle_run > int(numeric["max_consecutive_near_same_angle"])
+        ):
+            errors.append(
+                f"{sid} 与前序镜头同轴同侧且角度变化不足 {NEAR_ANGLE_DEG:.0f}°，"
+                f"近同角度连续 {near_angle_run} 镜超过上限 "
+                f"{int(numeric['max_consecutive_near_same_angle'])}"
+            )
         if same_scene_axis:
             if (pcamera.get("camera_side") in {"left", "right"}
                     and camera.get("camera_side") in {"left", "right"}
                     and pcamera.get("camera_side") != camera.get("camera_side")
                     and not reset):
                 errors.append(f"{sid} 未用中性/建立镜重置就跨越 180 度轴线")
-            try:
-                angle_delta = abs((float(camera.get("angle_deg")) -
-                                   float(pcamera.get("angle_deg")) + 180.0) % 360.0 - 180.0)
-            except (TypeError, ValueError):
-                angle_delta = 999.0
+            # P0：同轴同侧时景别变化不能豁免 30°；有意跳切须 deliberate_jump_cut
             if (pcamera.get("camera_side") == camera.get("camera_side")
-                    and pcamera.get("shot_size") == camera.get("shot_size")
-                    and angle_delta < 30.0 and not deliberate):
-                errors.append(f"{sid} 与上一镜同景别且机位变化仅 {angle_delta:.1f}°，不满足 30 度变化")
+                    and angle_delta < NEAR_ANGLE_DEG and not deliberate):
+                errors.append(
+                    f"{sid} 与上一镜同轴同侧且机位变化仅 {angle_delta:.1f}°，"
+                    f"不满足 {NEAR_ANGLE_DEG:.0f} 度变化（景别变化不能豁免）"
+                )
 
         exit_direction = pblocking.get("exit_direction")
         entry_direction = blocking.get("entry_direction")
@@ -439,25 +797,23 @@ def validate_sequence_language(shots: list[dict[str, Any]], editing_bible: dict[
             )
         minimum_variety = int(numeric["min_shot_size_variety_per_scene"])
         scene_sizes: dict[str, set[Any]] = {}
-        scene_roles: dict[str, set[Any]] = {}
         for shot in shots:
             scene_id = str(shot.get("scene_id"))
             crew = shot.get("crew") or {}
             scene_sizes.setdefault(scene_id, set()).add(
                 (crew.get("cinematography") or {}).get("shot_size")
             )
-            scene_roles.setdefault(scene_id, set()).add(
-                (crew.get("editing") or {}).get("coverage_role")
-            )
         for scene_id, sizes in scene_sizes.items():
             if len(sizes - {None, ""}) < minimum_variety:
                 errors.append(f"场景 {scene_id} 景别覆盖不足 {minimum_variety} 种")
+    errors.extend(_validate_scene_coverage_roles(shots, scenes))
     return errors
+
 
 
 def build_report(development: dict[str, Any], storyboard: dict[str, Any],
                  project: Path | None = None) -> dict[str, Any]:
-    errors = validate_crew_pipeline(development, storyboard)
+    errors = validate_crew_pipeline(development, storyboard, project=project)
     warnings: list[str] = []
     grammar_report = audit_binding(development, storyboard, project) if project else None
     if grammar_report:

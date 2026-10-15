@@ -34,6 +34,14 @@ from scripts.delivery_state import check as check_delivery
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def _seq_music():
+    return {"tempo_class": "medium", "cues": [
+        {"id": "downbeat", "time_sec": 0.0, "kind": "downbeat", "evidence": "起拍"},
+        {"id": "accent", "time_sec": 2.0, "kind": "accent", "evidence": "重音"},
+        {"id": "mid", "time_sec": 4.0, "kind": "accent", "evidence": "中段"},
+    ]}, {"duration_sec": 8.0, "lines": []}
+
+
 
 def command(script, *args):
     return subprocess.run([sys.executable, str(ROOT / 'scripts' / script), *map(str, args)],
@@ -280,10 +288,10 @@ class ProductionContracts(unittest.TestCase):
 
     def test_A12_cinematography_conflict(self):
         self.sb['shots'][0]['crew']['cinematography']['shot_size'] = 'close_up'
-        self.assertTrue(any('景别' in e for e in validate_crew_pipeline(self.dev, self.sb)))
+        self.assertTrue(any('景别' in e for e in validate_crew_pipeline(self.dev, self.sb, project=self.project)))
         self.sb['shots'][0]['crew']['cinematography']['shot_size'] = '全景'
         self.sb['shots'][0]['motion_design']['camera_motion'] = 'dolly'
-        self.assertTrue(any('运镜' in e for e in validate_crew_pipeline(self.dev, self.sb)))
+        self.assertTrue(any('运镜' in e for e in validate_crew_pipeline(self.dev, self.sb, project=self.project)))
 
     def test_A13_selected_candidate_must_materialize(self):
         plan = json.loads((self.project / 'state/story_plan.json').read_text(encoding='utf-8'))
@@ -305,35 +313,46 @@ class ProductionContracts(unittest.TestCase):
 
     def test_A14_axis_alias_and_reset_evidence(self):
         self.dev['scenes'][0]['axes']['renamed'] = copy.deepcopy(self.dev['scenes'][0]['axes']['door_axis'])
-        self.assertTrue(validate_crew_pipeline(self.dev, self.sb))
+        self.assertTrue(validate_crew_pipeline(self.dev, self.sb, project=self.project))
         self.sb['shots'][1]['crew']['editing']['axis_reset'] = True
-        self.assertTrue(any('桥接' in e for e in validate_sequence_language(self.sb['shots'], self.dev['crew_bible']['editing'])))
+        music, timeline = _seq_music()
+        self.assertTrue(any('桥接' in e for e in validate_sequence_language(
+            self.sb['shots'], self.dev['crew_bible']['editing'],
+            music_structure=music, timeline=timeline, fps=24,
+        )))
 
     def test_A15_cross_scene_and_discontinuous_time_not_direction_match(self):
         shots = copy.deepcopy(self.sb['shots'])
         shots[1]['scene_id'] = 'other'
         shots[1]['crew']['blocking']['entry_direction'] = 'right_to_left'
-        errors = validate_sequence_language(shots, self.dev['crew_bible']['editing'])
-        self.assertFalse(any('入画方向' in e for e in errors))
+        music, timeline = _seq_music()
+        errors = validate_sequence_language(
+            shots, self.dev['crew_bible']['editing'],
+            music_structure=music, timeline=timeline, fps=24,
+        )
+        self.assertFalse(any('入画方向' in e for e in errors), errors)
         shots[1]['scene_id'] = 'gate'
         shots[1]['crew']['editing']['time_relation'] = 'flashback'
-        errors = validate_sequence_language(shots, self.dev['crew_bible']['editing'])
-        self.assertFalse(any('入画方向' in e for e in errors))
+        errors = validate_sequence_language(
+            shots, self.dev['crew_bible']['editing'],
+            music_structure=music, timeline=timeline, fps=24,
+        )
+        self.assertFalse(any('入画方向' in e for e in errors), errors)
 
     def test_A16_declared_coverage_must_be_fulfilled(self):
         self.dev['scenes'][0]['coverage_requirements'] = ['reaction']
-        self.assertTrue(validate_crew_pipeline(self.dev, self.sb))
+        self.assertTrue(validate_crew_pipeline(self.dev, self.sb, project=self.project))
         self.dev['scenes'][0]['kind'] = 'performance'
         self.dev['scenes'][0]['coverage_requirements'] = ['establish', 'turn']
-        self.assertEqual(validate_crew_pipeline(self.dev, self.sb), [])
+        self.assertEqual(validate_crew_pipeline(self.dev, self.sb, project=self.project), [])
 
     def test_A17_strict_hook_and_integer_threshold(self):
         self.sb['shots'][0]['crew']['editing']['hook'] = 'false'
-        self.assertTrue(validate_crew_pipeline(self.dev, self.sb))
+        self.assertTrue(validate_crew_pipeline(self.dev, self.sb, project=self.project))
         self.sb['shots'][0]['crew']['editing']['hook'] = True
         for value in (1.5, True):
             self.dev['crew_bible']['editing']['pacing_policy']['max_consecutive_slow_shots'] = value
-            self.assertTrue(validate_crew_pipeline(self.dev, self.sb))
+            self.assertTrue(validate_crew_pipeline(self.dev, self.sb, project=self.project))
 
     def test_A18_A19_lyrics_and_production_authority(self):
         self.assertTrue(next(c['pass'] for c in check_timeline(self.timeline, '第一句\n第二句', 4)

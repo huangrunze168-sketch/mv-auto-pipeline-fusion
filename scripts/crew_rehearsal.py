@@ -27,12 +27,15 @@ REWORK = {
 }
 
 
-def analyze(development, storyboard):
+def analyze(development, storyboard, *, music_structure=None, timeline=None, fps=24.0, project=None):
     shots = storyboard.get('shots', [])
     if not unique_ids(shots): raise ValueError('预演分镜ID为空或重复')
     failures = timeline_errors(shots, shots[-1]['window']['end'])
     if failures: raise ValueError('; '.join(failures))
-    errors = validate_crew_pipeline(development, storyboard)
+    errors = validate_crew_pipeline(
+        development, storyboard,
+        music_structure=music_structure, timeline=timeline, fps=fps, project=project,
+    )
     rows, tasks, grouped_tasks = [], [], {}
     for shot in shots:
         crew = shot.get('crew') or {}
@@ -124,7 +127,15 @@ def build(project):
         payload = path.read_bytes()
         expected[path] = 'sha256:'+hashlib.sha256(payload).hexdigest()
         inputs[name] = json.loads(payload)
-    report = analyze(inputs['development'], inputs['storyboard'])
+    music_path = project / 'state' / 'music_structure.json'
+    timeline_path = project / 'state' / 'timeline.json'
+    music = json.loads(music_path.read_text(encoding='utf-8')) if music_path.is_file() else None
+    timeline = json.loads(timeline_path.read_text(encoding='utf-8')) if timeline_path.is_file() else None
+    fps = float((inputs['storyboard'] or {}).get('fps') or (timeline or {}).get('fps_assumed') or 24)
+    report = analyze(
+        inputs['development'], inputs['storyboard'],
+        music_structure=music, timeline=timeline, fps=fps, project=project,
+    )
     if inputs['development'].get('creative_workflow_revision') == 2:
         try:
             from .sequence_direction import require
