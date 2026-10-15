@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +72,8 @@ SHOT_DEPARTMENT_FIELDS = {
     ),
     "editing": (
         "editorial_role", "incoming_relation", "outgoing_relation", "rhythm_class",
-        "music_cue", "novelty_axis", "visual_change", "geography_status", "hook",
+        "music_cue", "novelty_axis", "visual_change", "visual_change_code",
+        "geography_status", "hook",
         "coverage_role", "transition_type", "cut_motivation", "audio_transition",
         "duration_intent",
     ),
@@ -170,6 +172,26 @@ EXPOSURE_BIASES = frozenset({
 })
 CAMERA_HEIGHT_POLICIES = frozenset({
     "eye_level", "low", "high", "grounded_threshold", "participant", "sit_eye_level",
+})
+
+NOVELTY_AXES = frozenset({
+    "prop", "viewpoint", "blocking", "light", "information", "geography",
+    "performance", "rhythm", "scale", "reveal", "costume", "sound",
+})
+VISUAL_CHANGE_CODES = frozenset({
+    "enter", "exit", "prop_state", "gaze_shift", "light_shift", "distance_shift",
+    "reveal", "geography", "performance_beat", "cutaway", "pose_shift", "rhythm_hit",
+})
+SCREEN_DIRECTION_REVERSE = {
+    "left_to_right": "right_to_left",
+    "right_to_left": "left_to_right",
+    "toward_camera": "away_camera",
+    "away_camera": "toward_camera",
+}
+EYELINE_QUADRANTS = frozenset({
+    "left", "right", "up", "down", "center",
+    "left_up", "left_down", "right_up", "right_down",
+    "toward_camera", "away_camera",
 })
 
 
@@ -642,6 +664,8 @@ def validate_crew_pipeline(
             errors.append(f"剧组部门 {department} 缺少交接物: {','.join(missing)}")
     if (bible.get("directing") or {}).get("style_application_order") != "after_film_grammar":
         errors.append("导演风格只能在基础视听语言通过后应用: style_application_order=after_film_grammar")
+    _reject_vague_aesthetic("crew_bible.character_design", bible.get("character_design") or {}, errors)
+    _reject_vague_aesthetic("crew_bible.production_design", bible.get("production_design") or {}, errors)
     handoffs = bible.get("handoffs") or []
     actual_handoffs: set[tuple[str, str]] = set()
     for handoff in handoffs:
@@ -770,6 +794,21 @@ def validate_crew_pipeline(
             errors.append(f"{sid} transition_type 不在受控词表")
         if editing.get("audio_transition") not in AUDIO_TRANSITIONS:
             errors.append(f"{sid} audio_transition 不在受控词表")
+        novelty = editing.get("novelty_axis")
+        if novelty not in NOVELTY_AXES:
+            errors.append(
+                f"{sid} novelty_axis 必须使用受控枚举: "
+                + "/".join(sorted(NOVELTY_AXES))
+            )
+        change_code = editing.get("visual_change_code")
+        if change_code not in VISUAL_CHANGE_CODES:
+            errors.append(
+                f"{sid} visual_change_code 必须使用受控枚举"
+                "（禁止只改 visual_change 措辞刷新注意力）"
+            )
+        _reject_vague_aesthetic(f"{sid} editing.visual_change", editing.get("visual_change"), errors)
+        character = crew.get("character_design") or {}
+        _reject_vague_aesthetic(f"{sid} character_design", character, errors)
 
     _validate_director_crew_constraints(development, shots, errors)
     errors.extend(validate_sequence_language(
@@ -778,6 +817,65 @@ def validate_crew_pipeline(
         scenes=development.get("scenes"),
     ))
     return errors
+
+
+
+def _normalize_visual_fingerprint(text: Any) -> str:
+    raw = str(text or "").casefold()
+    return re.sub(r"[^\w]+", "", raw, flags=re.UNICODE)
+
+
+def _eyeline_quadrant(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip().casefold()
+    if not text:
+        return None
+    # Accept controlled tokens directly
+    compact = text.replace(" ", "_").replace("-", "_")
+    if compact in EYELINE_QUADRANTS:
+        return compact
+    # Heuristic map from Chinese/English free text used in fixtures
+    has_left = any(token in text for token in ("左", "left"))
+    has_right = any(token in text for token in ("右", "right"))
+    has_up = any(token in text for token in ("上", "up", "上方"))
+    has_down = any(token in text for token in ("下", "down", "下方"))
+    if "toward" in text or "朝镜头" in text or "看镜头" in text:
+        return "toward_camera"
+    if "away" in text or "背对" in text or "离开镜头" in text:
+        return "away_camera"
+    if has_left and has_up:
+        return "left_up"
+    if has_left and has_down:
+        return "left_down"
+    if has_right and has_up:
+        return "right_up"
+    if has_right and has_down:
+        return "right_down"
+    if has_left:
+        return "left"
+    if has_right:
+        return "right"
+    if has_up:
+        return "up"
+    if has_down:
+        return "down"
+    if "中" in text or "center" in text:
+        return "center"
+    return None
+
+
+def _directions_reversed(prev: Any, curr: Any) -> bool:
+    if not isinstance(prev, str) or not isinstance(curr, str):
+        return False
+    a, b = prev.strip(), curr.strip()
+    return SCREEN_DIRECTION_REVERSE.get(a) == b
+
+
+def _is_static_path(blocking: dict[str, Any]) -> bool:
+    entry = blocking.get("entry_direction")
+    exit_ = blocking.get("exit_direction")
+    return entry in {None, "", "none", "static"} and exit_ in {None, "", "none", "static"}
 
 
 def validate_sequence_language(
@@ -970,29 +1068,79 @@ def validate_sequence_language(
             expected_edge = "left" if pblocking["exit_edge"] == "right" else "right"
             if blocking.get("entry_edge") not in {"none", expected_edge} and not reset:
                 errors.append(f"{sid} 入画边缘未接住上一镜出画边缘")
+        # P2 G4：同场 continuous 比对屏幕方向与视线象限
+        if continuous and same_scene and not reset:
+            prev_screen = pblocking.get("screen_direction")
+            curr_screen = blocking.get("screen_direction")
+            if (prev_screen not in {None, "", "none", "static"}
+                    and curr_screen not in {None, "", "none", "static"}
+                    and _directions_reversed(prev_screen, curr_screen)
+                    and not blocking.get("direction_reverse_justified")):
+                errors.append(
+                    f"{sid} screen_direction 相对上一镜无理由反向"
+                    f"({prev_screen}→{curr_screen})"
+                )
+            prev_eye = _eyeline_quadrant(pblocking.get("eyeline_vector"))
+            curr_eye = _eyeline_quadrant(blocking.get("eyeline_vector"))
+            if prev_eye and curr_eye:
+                reverse_pairs = {
+                    ("left", "right"), ("right", "left"),
+                    ("up", "down"), ("down", "up"),
+                    ("left_up", "right_down"), ("right_down", "left_up"),
+                    ("left_down", "right_up"), ("right_up", "left_down"),
+                    ("toward_camera", "away_camera"), ("away_camera", "toward_camera"),
+                }
+                if (prev_eye, curr_eye) in reverse_pairs and not blocking.get("eyeline_reverse_justified"):
+                    errors.append(
+                        f"{sid} eyeline_vector 象限相对上一镜无理由反向"
+                        f"({prev_eye}→{curr_eye})"
+                    )
+            # static/口型站桩：须 crossing_rule + 站位承接
+            if _is_static_path(blocking) or _is_static_path(pblocking):
+                if not str(blocking.get("crossing_rule") or "").strip():
+                    errors.append(
+                        f"{sid} 同场 continuous 且动线为 static/none 时必须声明 crossing_rule"
+                    )
+                prev_end = str(pblocking.get("end_mark") or "").strip()
+                curr_start = str(blocking.get("start_mark") or "").strip()
+                if prev_end and curr_start and prev_end != curr_start:
+                    errors.append(
+                        f"{sid} static/站桩段站位未承接：上一镜 end_mark≠本镜 start_mark"
+                    )
         if not editing.get("incoming_relation") or not pcrew.get("editing", {}).get("outgoing_relation"):
             errors.append(f"{sid} 与上一镜缺少双向剪辑关系说明")
 
-    visual_changes = [
-        (shot.get("crew") or {}).get("editing", {}).get("visual_change") for shot in shots
-    ]
-    for index in range(2, len(visual_changes)):
-        if visual_changes[index - 2] == visual_changes[index - 1] == visual_changes[index]:
-            errors.append(f"{shots[index].get('id')} 连续三个镜头没有新的视觉变化")
+    attention_keys: list[tuple[Any, ...]] = []
+    for shot in shots:
+        editing = (shot.get("crew") or {}).get("editing") or {}
+        novelty = editing.get("novelty_axis")
+        code = editing.get("visual_change_code")
+        # 指纹：优先受控 code；否则 novelty + 去标点视觉变化，防止只改措辞刷新
+        fingerprint = code or (
+            str(novelty or ""),
+            _normalize_visual_fingerprint(editing.get("visual_change")),
+        )
+        attention_keys.append((novelty, fingerprint))
+    for index in range(2, len(attention_keys)):
+        if attention_keys[index - 2] == attention_keys[index - 1] == attention_keys[index]:
+            errors.append(
+                f"{shots[index].get('id')} 连续三个镜头 novelty/visual_change 指纹相同，"
+                "禁止只改措辞假装刷新注意力"
+            )
             break
     if not invalid:
         run_value: Any = object()
         run_duration = 0.0
         max_stasis = 0.0
-        for value, duration in zip(visual_changes, durations):
-            if value == run_value:
+        for key, duration in zip(attention_keys, durations):
+            if key == run_value:
                 run_duration += duration
             else:
-                run_value, run_duration = value, duration
+                run_value, run_duration = key, duration
             max_stasis = max(max_stasis, run_duration)
         if max_stasis > numeric["max_visual_stasis_sec"] + 1e-6:
             errors.append(
-                f"相同视觉事件持续 {max_stasis:.2f}s，超过 "
+                f"相同注意力指纹持续 {max_stasis:.2f}s，超过 "
                 f"{numeric['max_visual_stasis_sec']:.2f}s"
             )
         minimum_variety = int(numeric["min_shot_size_variety_per_scene"])
