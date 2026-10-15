@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 credentials.json
 *.wav
+.test-tmp/
+.pytest_cache/

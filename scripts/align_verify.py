@@ -19,6 +19,8 @@ import json
 import math
 import sys
 import wave
+import hashlib
+import subprocess
 from pathlib import Path
 
 SR = 16000
@@ -94,6 +96,7 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--candidate-wav", default=None,
                     help="待验收成片的 16k 单声道 WAV；省略时仅做源音频自检")
+    ap.add_argument("--candidate-video", default=None)
     a = ap.parse_args()
 
     sb = json.loads(Path(a.storyboard_json).read_text(encoding="utf-8"))
@@ -110,7 +113,7 @@ def main():
     # 验1 时长合计
     total = sum(float(s["window"]["end"]) - float(s["window"]["start"]) for s in shots)
     timeline_dur = float(tl["duration_sec"])
-    c1 = {"clips_sum": round(total, 3), "song": round(source_dur, 3),
+    c1 = {"planned_shots_sum": round(total, 3), "song": round(source_dur, 3),
           "timeline": round(timeline_dur, 3), "candidate_audio": round(candidate_dur, 3),
           "diff": round(total - source_dur, 3),
           "timeline_diff": round(timeline_dur - source_dur, 3),
@@ -143,12 +146,47 @@ def main():
         "overall": "PASS" if (c1["pass"] and all(r["pass"] for r in c2)
                               and all(r["pass"] for r in c3)) else "FAIL",
     }
+    report["planned_duration"] = total
+    report["lip_sync_verified"] = False
+    report["energy_scope"] = "full_mix_proxy_not_vocal_or_lips"
+    if a.candidate_video:
+        try:
+            from .media_verify import probe
+            from .pipeline_contracts import digest
+        except ImportError:
+            from media_verify import probe
+            from pipeline_contracts import digest
+        media = probe(a.candidate_video)
+        video = next(s for s in media["streams"] if s["codec_type"] == "video")
+        actual_video = float(video.get("duration", media["format"]["duration"]))
+        report["actual_video_duration"] = actual_video
+        report["candidate_video_sha256"] = digest(a.candidate_video)
+        if a.candidate_wav:
+            actual_audio = subprocess.run(['ffmpeg', '-v', 'error', '-i', a.candidate_video,
+                                          '-map', '0:a:0', '-ac', '1', '-ar', '16000',
+                                          '-c:a', 'pcm_s16le', '-f', 's16le', '-'],
+                                         capture_output=True, check=True).stdout
+            with wave.open(a.candidate_wav, 'rb') as candidate_file:
+                declared_audio = candidate_file.readframes(candidate_file.getnframes())
+            report['candidate_audio_bound_to_video'] = actual_audio == declared_audio
+            report['candidate_audio_pcm_sha256'] = hashlib.sha256(actual_audio).hexdigest()
+            if not report['candidate_audio_bound_to_video']:
+                report['overall'] = 'FAIL'
+        if abs(actual_video-source_dur)>DUR_TOL:
+            report["overall"] = "FAIL"
+        if not a.candidate_wav:
+            report["overall"] = "DIAGNOSTIC_PASS" if report["overall"] == "PASS" else "FAIL"
+        report["delivery_verified"] = report["overall"] == "PASS"
+    else:
+        report["delivery_verified"] = False
+        if report["overall"] == "PASS":
+            report["overall"] = "AUDIO_ONLY_PASS" if a.candidate_wav else "DIAGNOSTIC_PASS"
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         Path(a.out).write_text(text, encoding="utf-8")
     print(text)
-    sys.exit(0 if report["overall"] == "PASS" else 1)
+    sys.exit(0 if report["overall"] in {"PASS", "AUDIO_ONLY_PASS", "DIAGNOSTIC_PASS"} else 1)
 
 
 if __name__ == "__main__":

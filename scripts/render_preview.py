@@ -187,6 +187,7 @@ def main():
             [sys.executable, str(Path(__file__).parent / "align_verify.py"),
              str(reference_wav), str(proj / "state" / "storyboard.json"),
              str(proj / "state" / "timeline.json"), "--candidate-wav", str(candidate_wav),
+             "--candidate-video", str(final),
              "--out", str(report_path)], capture_output=True, text=True)
         verification = "PASS" if verify.returncode == 0 else "FAIL"
     finally:
@@ -200,6 +201,8 @@ def main():
                       "sum_actual": round(total, 3),
                       "max_delta": round(max(abs(r["delta"]) for r in report), 4)},
                      ensure_ascii=False))
+    if verification != "PASS":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import copy
+import base64
 import json
 import shutil
 import subprocess
@@ -16,13 +17,114 @@ from scripts.edit_assemble import compile_selection
 from scripts.edit_assemble import build as render_edit
 from scripts.visual_revision import check_remix, check_repair
 from scripts.director_review_gate import initial_review, validate_review
+from scripts.crew_pipeline import validate_crew_pipeline, validate_sequence_language
+from scripts.film_grammar_corpus import build_profile, audit_storyboard, audit_binding
 
 ROOT = Path(__file__).resolve().parents[1]
+PNG_BYTES = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9WQAAAAASUVORK5CYII=")
 
 
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def crew_bible_fixture():
+    departments = {
+        "screenwriting": "directing", "directing": "blocking",
+        "production_design": "blocking", "character_design": "blocking",
+        "blocking": "cinematography", "lighting": "cinematography",
+    }
+    handoffs = [
+        {"from": source, "to": target, "deliverable": "结构化交接物",
+         "acceptance": "目标部门逐项确认"} for source, target in departments.items()
+    ] + [
+        {"from": "production_design", "to": "cinematography", "deliverable": "空间与材质",
+         "acceptance": "画面层次可拍"},
+        {"from": "cinematography", "to": "editing", "deliverable": "覆盖与轴线",
+         "acceptance": "切点可连续"},
+        {"from": "directing", "to": "editing", "deliverable": "表演与信息节拍",
+         "acceptance": "信息释放成立"},
+    ]
+    return {
+        "schema_version": 2, "handoffs": handoffs,
+        "screenwriting": {"dramatic_question": "她是否离开", "conflict_progression": "等待到决定",
+                          "reveal_plan": "第二镜揭示决定"},
+        "directing": {"scene_objective": "完成选择", "performance_arc": "迟疑到坚定",
+                      "staging_principle": "门槛分隔内外",
+                      "style_application_order": "after_film_grammar"},
+        "cinematography": {"coverage_strategy": "先空间后反应",
+                           "coverage_requirements": ["establish", "turn"],
+                           "lens_strategy": "宽到近", "axis_policy": "门槛为主轴"},
+        "lighting": {"motivated_source_strategy": "门外天光", "contrast_arc": "暗到亮",
+                     "exposure_priority": "保护门外高光", "continuity_strategy": "门柱影线不漂移"},
+        "production_design": {"set_story": "磨损门槛留下等待痕迹", "depth_layers": "门柱/人物/道路",
+                              "material_palette": "旧木灰石白布", "hero_prop_strategy": "信纸推动决定"},
+        "character_design": {"silhouette_rule": "长袖与门框分离", "wardrobe_arc": "白衣保持",
+                             "wear_continuity": "袖口折痕连续"},
+        "blocking": {"geography_rule": "先交代门内外", "movement_axis": "左向右出门",
+                     "entrance_exit_logic": "同方向承接"},
+        "editing": {"rhythm_map": "两秒建立、两秒决定", "hook_strategy": "开场门槛与信纸",
+                    "cut_pattern": "动作到视线匹配", "sound_image_strategy": "重音切画，气口留白",
+                    "pacing_policy": {
+                        "max_average_shot_sec": 3.0, "slow_shot_threshold_sec": 2.5,
+                        "max_consecutive_slow_shots": 2, "max_consecutive_same_rhythm": 2,
+                        "hook_deadline_sec": 2.0, "max_hook_gap_sec": 4.0,
+                        "max_visual_stasis_sec": 3.0, "min_shot_size_variety_per_scene": 2,
+                    }},
+    }
+
+
+def shot_crew_fixture(index):
+    first = index == 0
+    return {
+        "screenwriting": {"objective": "辨认信纸" if first else "作出决定", "obstacle": "犹豫",
+                          "turn": "看见旧字" if first else "望向门外", "audience_gain": "理解她要离开"},
+        "directing": {"performance_beat": "停顿" if first else "抬眼", "subtext": "舍不得",
+                      "staging_intent": "手与门形成因果"},
+        "cinematography": {
+            "viewpoint_id": "table_side" if first else "door_reverse", "shot_size": "全景" if first else "近景",
+            "camera_position": "桌侧" if first else "门外", "camera_height": "坐姿眼高",
+            "camera_side": "left", "angle_deg": 0 if first else 35,
+            "lens_behavior": "spatial_open" if first else "neutral",
+            "camera_movement": "locked", "movement_motivation": "等待动作完成",
+            "axis_id": "door_axis", "focal_length_mm": 35 if first else 65,
+            "position_xy": [0, 1],
+            "focus_target": "信纸" if first else "双眼", "subject_placement": "右三分位" if first else "左三分位",
+            "headroom": 0.12, "look_room": 0.42, "depth_strategy": "门柱前景与道路后景",
+            "frame_purpose": "交代空间" if first else "读取决定",
+        },
+        "lighting": {"source_used": "门外天光", "exposure_target": "保护窗外",
+                     "face_priority": "允许半脸入暗", "shadow_behavior": "门柱形成遮挡",
+                     "key_direction": "画面右后侧", "key_quality": "大面积柔光",
+                     "fill_strategy": "室内负补光", "practicals": "桌面油灯仅作背景亮点",
+                     "color_temp_k": 5600, "continuity_anchor": "鼻影与门柱影同向"},
+        "production_design": {"foreground_story": "门柱", "midground_story": "人物与信纸",
+                              "background_story": "道路", "hero_prop_state": "信纸展开" if first else "信纸入袖",
+                              "visual_hook": "风掀纸角" if first else "门外冷光切入眼神",
+                              "set_dressing": "桌角磨损与落灰", "material_response": "白布柔反射、旧木吸光",
+                              "color_accent": "信纸暖黄", "atmospheric_layer": "门外薄尘",
+                              "continuity_anchor": "信纸折痕朝上"},
+        "character_design": {"silhouette_state": "长袖落在桌沿", "wardrobe_state": "白衣完整",
+                             "grooming_state": "发簪与耳饰连续"},
+        "blocking": {"start_mark": "桌内侧", "end_mark": "门槛前" if not first else "桌内侧",
+                     "entry_direction": "none" if first else "left_to_right",
+                     "exit_direction": "left_to_right", "gaze_target": "信纸" if first else "门外",
+                     "screen_direction": "left_to_right", "body_orientation": "朝门三分之二侧身",
+                     "entry_edge": "none" if first else "left", "exit_edge": "right",
+                     "action_path": "桌内侧到门槛直线", "eyeline_vector": "右上方门外",
+                     "crossing_rule": "不越过门槛轴"},
+        "editing": {"editorial_role": "建立空间" if first else "揭示决定",
+                    "incoming_relation": "song_start" if first else "动作匹配",
+                    "outgoing_relation": "动作匹配" if first else "chapter_end",
+                    "rhythm_class": "setup" if first else "turn", "music_cue": "起拍" if first else "重音",
+                    "novelty_axis": "prop" if first else "viewpoint",
+                    "visual_change": "纸角被风掀起" if first else "视线转向门外",
+                    "geography_status": "establish" if first else "established_from_previous",
+                    "hook": first, "coverage_role": "establish" if first else "turn",
+                    "transition_type": "hard_cut", "cut_motivation": "动作完成" if first else "音乐重音",
+                    "audio_transition": "music_hit", "duration_intent": "留够动作与一次呼吸"},
+    }
 
 
 def fixture(project):
@@ -54,7 +156,7 @@ def fixture(project):
                      state_before={"phase": index}, state_after={"phase": index + 1},
                      motion_design={"start_state": "手持信纸", "action": "收信",
                                     "physics": "接触后收拢", "camera_motion": "固定",
-                                    "end_state": "信入袖内"})
+                                    "end_state": "信入袖内"}, crew=shot_crew_fixture(index))
         stories.append(story)
     development = {
         "treatment": {"concept": "等待后出关", "form": "叙事与演唱",
@@ -64,8 +166,24 @@ def fixture(project):
         "source_ledger": [{"id": "B1", "kind": "proposal", "source_id": "song",
                            "description": "把等待解释为出关前停顿", "status": "proposed"}],
         "scenes": [{"id": "gate", "source_beat": "B1", "topology": "门内连接道路",
-                    "light_map": "门外天光", "material_rules": "布与石分别受光", "master_prompt": "可通行的城门"}],
+                    "kind": "narrative", "coverage_requirements": ["establish", "turn"],
+                    "axes": {"door_axis": {"start": [0, 0], "end": [1, 0]}},
+                    "light_map": "门外天光", "material_rules": "布与石分别受光", "master_prompt": "可通行的城门",
+                    "art_direction": {"foreground": "门柱", "midground": "人物与桌",
+                                      "background": "道路", "scenic_action": "风掀纸角",
+                                      "hero_prop": "旧信纸", "negative_space": "门外留白",
+                                      "material_contrast": "旧木、灰石、白布", "set_history": "多年候关留下磨损",
+                                      "color_script": "室内褐灰到门外青白", "scale_cue": "门高三倍人身",
+                                      "background_activity": "远处旗角与薄尘缓动"},
+                    "lighting_plan": {"primary_source": "门外天光", "secondary_source": "室内弱反射",
+                                      "shadow_zones": "门柱背面", "exposure_priority": "保护窗外",
+                                      "color_temperature_relation": "门外冷、室内中性",
+                                      "cue_changes": "决定时人物进入冷光", "key_direction": "右后侧",
+                                      "key_quality": "柔而有方向", "fill_strategy": "室内负补光",
+                                      "practicals": "油灯压低不抢脸",
+                                      "continuity_anchor": "门柱投影位置固定"}}],
         "references": [], "visual_rules": [],
+        "crew_bible": crew_bible_fixture(),
     }
     style = {"style_name": "写实", "fingerprint": "sha256:style", "aspect_ratio": "16:9"}
     for name, data in (("timeline", timeline), ("music_structure", music), ("visual_edit_plan", edit),
@@ -77,6 +195,137 @@ def fixture(project):
 
 
 class VisualWorkflowTests(unittest.TestCase):
+    def test_crew_handoff_and_physical_camera_values_are_hard_gates(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            _, _, _, development, _ = fixture(project)
+            storyboard = build(project)
+            development["crew_bible"]["handoffs"] = [
+                item for item in development["crew_bible"]["handoffs"]
+                if not (item["from"] == "lighting" and item["to"] == "cinematography")
+            ]
+            storyboard["shots"][0]["crew"]["cinematography"]["headroom"] = 1.4
+            storyboard["shots"][0]["crew"]["lighting"]["color_temp_k"] = 25000
+            errors = validate_crew_pipeline(development, storyboard)
+            self.assertTrue(any("lighting->cinematography" in error for error in errors))
+            self.assertTrue(any("headroom" in error for error in errors))
+            self.assertTrue(any("color_temp_k" in error for error in errors))
+
+    def test_attention_refresh_and_coverage_roles_are_enforced(self):
+        editing = crew_bible_fixture()["editing"]
+        editing["pacing_policy"].update(
+            max_average_shot_sec=10, slow_shot_threshold_sec=20,
+            max_hook_gap_sec=3, max_visual_stasis_sec=4,
+            min_shot_size_variety_per_scene=2,
+        )
+        shots = []
+        for index in range(3):
+            crew = shot_crew_fixture(index)
+            crew["editing"].update(
+                hook=index == 0, visual_change="人物仍坐在桌前", coverage_role="develop",
+                geography_status="establish" if index == 0 else "established_from_previous",
+            )
+            crew["cinematography"]["shot_size"] = "medium" if index < 2 else "close"
+            crew["cinematography"]["viewpoint_id"] = f"view-{index}"
+            crew["cinematography"]["angle_deg"] = index * 35
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
+                          "crew": crew})
+        errors = validate_sequence_language(shots, editing)
+        self.assertTrue(any("钩子间隔" in error for error in errors))
+        self.assertTrue(any("相同视觉事件持续" in error for error in errors))
+        self.assertFalse(any("reaction/detail" in error for error in errors))
+        self.assertFalse(any("turn/payoff" in error for error in errors))
+
+    def test_film_grammar_profile_is_anonymous_and_requires_enough_films_for_enforcement(self):
+        records = []
+        for film_index in range(2):
+            for shot_index, (duration, size, movement) in enumerate((
+                (1.0, "wide", "locked"), (2.0, "medium", "dolly"),
+                (3.0, "close", "locked"),
+            )):
+                records.append({
+                    "source_id": "test", "film_id": f"F{film_index}", "scene_id": "S1",
+                    "shot_index": shot_index,
+                    "duration_sec": duration, "shot_size": size,
+                    "camera_movement": movement, "rating": 8.2,
+                })
+        manifest = {
+            "schema_version": 1, "media_policy": "annotations_only",
+            "sources": [{"id": "test", "title": "测试标注", "url": "https://example.test",
+                         "license_or_terms": "test-only", "access_scope": "annotations"}],
+        }
+        profile = build_profile(records, manifest, profile_id="high-score-drama",
+                                min_rating=8.0, min_films=3)
+        self.assertEqual(profile["status"], "exploratory_only")
+        self.assertFalse(profile["provenance"]["contains_frames"])
+        shots = []
+        for index, duration in enumerate((6.0, 6.0)):
+            crew = shot_crew_fixture(index)
+            crew["cinematography"]["shot_size"] = "wide" if index == 0 else "close"
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * duration, "end": (index + 1) * duration},
+                          "crew": crew})
+        advisory = audit_storyboard(profile, {"shots": shots}, mode="advisory")
+        self.assertFalse(advisory["errors"])
+        self.assertTrue(any("平均镜长" in warning for warning in advisory["warnings"]))
+        enforced = audit_storyboard(profile, {"shots": shots}, mode="enforce_envelope")
+        self.assertTrue(any("样本影片数不足" in error for error in enforced["errors"]))
+        self.assertTrue(any("平均镜长" in error for error in enforced["errors"]))
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            profile_path = project / "state/reference_profiles/high-score-drama.json"
+            write(profile_path, profile)
+            development = {"grammar_reference": {
+                "profile_path": "state/reference_profiles/high-score-drama.json",
+                "profile_sha256": fingerprint(profile_path), "profile_id": "high-score-drama",
+                "mode": "advisory", "rationale": "匹配剧情类 MV", "use_scope": ["editing"],
+            }}
+            bound = audit_binding(development, {"shots": shots}, project)
+            self.assertEqual(bound["profile"]["profile_id"], "high-score-drama")
+            profile_path.write_text("{}", encoding="utf-8")
+            changed = audit_binding(development, {"shots": shots}, project)
+            self.assertTrue(any("指纹" in error for error in changed["errors"]))
+
+    def test_crew_pipeline_blocks_three_repeated_angles_and_broken_blocking(self):
+        editing = crew_bible_fixture()["editing"]
+        shots = []
+        for index in range(3):
+            crew = shot_crew_fixture(0)
+            crew["editing"].update(
+                hook=index == 0,
+                geography_status="establish" if index == 0 else "established_from_previous",
+                incoming_relation="song_start" if index == 0 else "same_angle_cut",
+                outgoing_relation="same_angle_cut" if index < 2 else "chapter_end",
+                rhythm_class="same",
+                visual_change="人物仍坐在桌前",
+            )
+            crew["blocking"]["entry_direction"] = "right_to_left" if index == 1 else "left_to_right"
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
+                          "crew": crew})
+        errors = validate_sequence_language(shots, editing)
+        self.assertTrue(any("连续三个同角度" in error for error in errors))
+        self.assertTrue(any("人物动线跳变" in error for error in errors))
+        self.assertTrue(any("30 度" in error for error in errors))
+        self.assertTrue(any("没有新的视觉变化" in error for error in errors))
+
+    def test_director_style_cannot_precede_film_grammar(self):
+        development = {"crew_bible": crew_bible_fixture(), "scenes": [{
+            "id": "gate",
+            "art_direction": {key: "已设计" for key in (
+                "foreground", "midground", "background", "scenic_action", "hero_prop",
+                "negative_space", "material_contrast")},
+            "lighting_plan": {key: "已设计" for key in (
+                "primary_source", "secondary_source", "shadow_zones", "exposure_priority",
+                "color_temperature_relation", "cue_changes")},
+        }]}
+        shot = {"id": "SH001", "scene_id": "gate", "window": {"start": 0.0, "end": 2.0},
+                "crew": shot_crew_fixture(0)}
+        development["crew_bible"]["directing"]["style_application_order"] = "style_first"
+        errors = validate_crew_pipeline(development, {"shots": [shot]})
+        self.assertTrue(any("导演风格只能" in error for error in errors))
+
     def test_narrative_sample_can_mark_lipsync_not_applicable_but_not_other_checks(self):
         plan = {"production_policy": {"prototype_chapter": "CH01"},
                 "chapters": [{"id": "CH01", "shot_deltas": [{"lip_sync": False}]}]}
@@ -123,7 +372,7 @@ class VisualWorkflowTests(unittest.TestCase):
             write(project / "state/edit_selection.json", {"selections": [
                 {"shot_id": shot["id"], "clip_id": "C1", "in_frame": 12, "out_frame": 60,
                  "edit_reason": "测试两秒动作", "state_check": "连续"} for shot in sb["shots"]]})
-            assembly = render_edit(project, render=True)
+            assembly = render_edit(project, render=True, technical_preview=True)
             self.assertEqual(assembly["status"], "rendered")
             for entry in assembly["entries"]:
                 info = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -227,8 +476,8 @@ class VisualWorkflowTests(unittest.TestCase):
             fixture(project)
             sb = build(project)
             master, frame = project / "master.png", project / "frame.png"
-            master.write_bytes(b"test master asset")
-            frame.write_bytes(b"test keyframe asset")
+            master.write_bytes(PNG_BYTES)
+            frame.write_bytes(PNG_BYTES)
             register(project, "M1", "scene_master", "gate", master, "测试批准记录")
             register(project, "SH001", "keyframe", "gate", frame, "测试批准记录", "M1")
             registry = json.loads((project / "state" / "visual_assets.json").read_text(encoding="utf-8"))
@@ -245,7 +494,7 @@ class VisualWorkflowTests(unittest.TestCase):
             write(project / "state/development.json", dev)
             sb = build(project)
             asset = project / "asset.png"
-            asset.write_bytes(b"test asset")
+            asset.write_bytes(PNG_BYTES)
             register(project, "M1", "scene_master", "gate", asset, "观察记录")
             register(project, "SH001", "keyframe", "gate", asset, "观察记录", "M1")
             dev["scenes"][1]["master_prompt"] = "只修改道路地点"
@@ -273,7 +522,7 @@ class VisualWorkflowTests(unittest.TestCase):
             self.assertEqual(p2["meta"]["lyric_text"], "第一句\n第二句")
             run("chapter_plan_build.py", "--max-duration", "4")
             asset = project / "master.png"
-            asset.write_bytes(b"test visual asset")
+            asset.write_bytes(PNG_BYTES)
             register(project, "M1", "scene_master", "gate", asset, "测试观察")
             for shot in sb["shots"]:
                 register(project, shot["id"], "keyframe", "gate", asset, "测试观察", "M1")

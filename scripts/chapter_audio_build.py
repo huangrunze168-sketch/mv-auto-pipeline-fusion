@@ -6,6 +6,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -38,6 +39,14 @@ def build_audio_segments(project: Path, *, sample_rate: int | None = None) -> di
     timeline_path = project / "state" / "timeline.json"
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
+    try:
+        from .chapter_plan_build import require_production_timing
+        from .pipeline_contracts import atomic_batch, require_no_transaction
+    except ImportError:
+        from chapter_plan_build import require_production_timing
+        from pipeline_contracts import atomic_batch, require_no_transaction
+    require_no_transaction(project)
+    require_production_timing(timeline, [s for c in plan.get("chapters", []) for s in c.get("shot_deltas", [])])
     source = resolve_master(project, timeline)
     source_info = probe_audio(source)
     if sample_rate is not None and sample_rate <= 0:
@@ -54,30 +63,34 @@ def build_audio_segments(project: Path, *, sample_rate: int | None = None) -> di
         "source_sha256": sha256(source),
         "segments": [],
     }
+    updates = {}
     for chapter in plan.get("chapters", []):
         start = float(chapter["window"]["start"])
         duration = float(chapter["duration_sec"])
         output = target_dir / f"{chapter['id']}.wav"
-        run([
-            "ffmpeg", "-y", "-v", "error", "-ss", f"{start:.10f}",
-            "-t", f"{duration:.10f}", "-i", str(source), "-vn", *rate_args,
-            "-c:a", "pcm_s24le", str(output),
-        ])
+        with tempfile.TemporaryDirectory(dir=target_dir) as temporary:
+            staged = Path(temporary) / 'segment.wav'
+            run([
+                "ffmpeg", "-y", "-v", "error", "-ss", f"{start:.10f}",
+                "-t", f"{duration:.10f}", "-i", str(source), "-vn", *rate_args,
+                "-c:a", "pcm_s24le", str(staged),
+            ])
+            payload = staged.read_bytes()
+        updates[output] = payload
         chapter["audio_asset"] = {
             "contains_lip_sync_shots": any(bool(item.get("lip_sync"))
                                             for item in chapter.get("shot_deltas", [])),
             "local_path": str(output.relative_to(project)).replace("\\", "/"),
-            "sha256": sha256(output),
+            "sha256": hashlib.sha256(payload).hexdigest(),
             "source_window": {"start": start, "end": float(chapter["window"]["end"])},
             "binding": "由用户选定后端的适配层决定；核心流程不假设字段名或音频能力",
         }
         manifest["segments"].append({"chapter_id": chapter["id"], **chapter["audio_asset"]})
 
-    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n",
-                         encoding="utf-8")
+    updates[plan_path] = json.dumps(plan, ensure_ascii=False, indent=2) + "\n"
     manifest_path = project / "state" / "chapter_audio_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-                             encoding="utf-8")
+    updates[manifest_path] = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    atomic_batch(updates)
     return {"chapters": len(manifest["segments"]), "output": str(manifest_path)}
 
 

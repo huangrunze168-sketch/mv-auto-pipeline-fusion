@@ -6,6 +6,10 @@ import hashlib
 import json
 import sys
 from pathlib import Path
+try:
+    from .crew_execution import execution_lines
+except ImportError:
+    from crew_execution import execution_lines
 
 try:
     from .visual_development import require as require_development, fingerprint, shot_fingerprint
@@ -48,6 +52,7 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
     for shot_index, shot in enumerate(shots, first_keyframe_index):
         meta = shot["meta"]
         direction = shot.get("direction", {})
+        crew = direction.get("crew", {})
         method = direction.get("method", {})
         scene_master = direction.get("scene_master", {})
         missing_axes = [key for key in (
@@ -80,6 +85,7 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
             "camera_witness": shot["camera"],
             "director_axes": method,
             "scene_master": scene_master,
+            "crew": crew,
             "motion_physics": direction.get("anti_ai", {}).get("motion_rule", ""),
             "performance_audio_intent": (
                 f"需要演唱口型；完整行歌词仅作上下文：{meta.get('lyric_text', '')}；实际口型服从本镜音频窗口，禁止重唱被裁掉的部分" if lip
@@ -143,6 +149,7 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
             f"- 观众信息：{beat['scene_master']['audience_information']}",
             f"- 实际机位与画框：{beat['scene_master']['shooting_station']}；{beat['scene_master']['frame_boundary']}",
             f"- 可观察验收：{beat['scene_master']['visual_acceptance']}",
+            *('- ' + instruction for instruction in execution_lines(beat['crew'])),
             "- 导演四轴：" + "；".join(
                 str(beat["director_axes"].get(key, "")) for key in
                 ("light_contrast", "color_exposure", "lens_camera", "composition_space")
@@ -179,14 +186,47 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
 
 
 def build(project: Path) -> dict:
+    try:
+        from .pipeline_contracts import atomic_batch
+    except ImportError:
+        from pipeline_contracts import atomic_batch
+    updates = {}
+    project = Path(project).resolve()
+    tracked = [project/'state'/f'{name}.json' for name in (
+        'chapter_plan', 'style', 'storyboard', 'development', 'timeline', 'visual_assets',
+        'story_plan', 'visual_edit_plan', 'music_structure')]
+    tracked.append(project/'gates/gate5.json')
+    tracked.append(Path(__file__).resolve().parents[1]/'vendor/zy-cinematic-realism/references/directors/index.md')
+    tracked.extend((project/'prompts').glob('SH*.json'))
+    tracked.extend((project/'prompts/motion').glob('SH*.json'))
+    expected = {path: fingerprint(path) if path.is_file() else None for path in tracked}
     plan_path = project / "state" / "chapter_plan.json"
     plan = load(plan_path)
     style = load(project / "state" / "style.json")
     storyboard = load(project / "state" / "storyboard.json")
     if plan.get("source_storyboard_fingerprint") != fingerprint(project / "state" / "storyboard.json"):
         raise ValueError("章节计划依赖旧分镜，请重建章节计划")
-    require_development(project, storyboard, style)
+    try:
+        from .crew_rehearsal import require_before_prompts
+    except ImportError:
+        from crew_rehearsal import require_before_prompts
+    require_before_prompts(project)
+    development = require_development(project, storyboard, style)
+    if style.get('director_ref', {}).get('name'):
+        try:
+            from .visual_development import VENDOR
+        except ImportError:
+            from visual_development import VENDOR
+        expected[(VENDOR/development['director']['source_file']).resolve()] = development['director']['source_sha256']
+    if development.get('grammar_reference'):
+        binding = development['grammar_reference']
+        expected[(project/binding['profile_path']).resolve()] = binding['profile_sha256']
     timeline = load(project / "state" / "timeline.json")
+    try:
+        from .chapter_plan_build import require_production_timing
+    except ImportError:
+        from chapter_plan_build import require_production_timing
+    require_production_timing(timeline, storyboard["shots"])
     if not all(item["pass"] for item in check_storyboard(storyboard, timeline)):
         raise ValueError("章节编译前必须通过关6")
     gate = load(project / "gates" / "gate5.json")
@@ -198,12 +238,20 @@ def build(project: Path) -> dict:
         if recorded.get(path.name) != hashlib.sha256(path.read_bytes()).hexdigest():
             raise ValueError(f"{shot['id']} 提示词已变动，重新运行关5")
         prompt = load(path)
+        try:
+            from .crew_execution import validate_motion_package
+        except ImportError:
+            from crew_execution import validate_motion_package
+        motion_errors = validate_motion_package(prompt, load(project/'prompts/motion'/path.name), fingerprint(path))
+        if motion_errors: raise ValueError('; '.join(motion_errors))
         checks = check_prompt(prompt, timeline, style, any((project / "input").glob("protagonist.*")), shot)
         if (not all(item["pass"] for item in checks)
                 or prompt["meta"].get("development_fingerprint") != fingerprint(project / "state/development.json")
                 or prompt["meta"].get("shot_design_fingerprint") != shot_fingerprint(shot)):
             raise ValueError(f"{shot['id']} 制作包对应旧设计，重新编译并运行关5")
     registry = load(project / "state" / "visual_assets.json")
+    for asset in registry['assets'].values():
+        expected[(project/asset['path']).resolve()] = asset['sha256']
     frames = {shot["id"]: require_keyframe(project, shot, registry) for shot in storyboard["shots"]}
     aspect_ratio = str(style.get("aspect_ratio", "")).strip()
     if not aspect_ratio:
@@ -213,6 +261,7 @@ def build(project: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs = []
     protagonist = next(iter((project / "input").glob("protagonist.*")), None)
+    if protagonist: expected[protagonist] = fingerprint(protagonist)
     for chapter in plan.get("chapters", []):
         missing = [sid for sid in chapter.get("shot_ids", []) if sid not in prompt_map]
         if missing:
@@ -240,16 +289,15 @@ def build(project: Path) -> dict:
         compiled["reference_bindings"] = blueprint["reference_bindings"]
         json_path = out_dir / f"{chapter['id']}.json"
         text_path = out_dir / f"{chapter['id']}.txt"
-        json_path.write_text(json.dumps(compiled, ensure_ascii=False, indent=2) + "\n",
-                             encoding="utf-8")
-        text_path.write_text(compiled["prompt"], encoding="utf-8")
+        updates[json_path] = json.dumps(compiled, ensure_ascii=False, indent=2) + "\n"
+        updates[text_path] = compiled["prompt"]
         chapter["chapter_prompt"] = {
             "path": str(text_path.relative_to(project)).replace("\\", "/"),
             "sha256": compiled["prompt_sha256"],
             "compiler": "zy_scene_master_to_model_neutral_chapter_v1",
         }
         outputs.append(str(text_path))
-    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    updates[plan_path] = json.dumps(plan, ensure_ascii=False, indent=2) + "\n"
 
     prototype = plan.get("production_policy", {}).get("prototype_chapter")
     manifest = {
@@ -271,8 +319,10 @@ def build(project: Path) -> dict:
         "warning": "核心流程不提交生成任务；用户选定后端并核验真实契约后，才由外部适配层编译和提交代表样片",
     }
     manifest_path = project / "state" / "generation_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-                             encoding="utf-8")
+    updates[manifest_path] = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    for path in updates:
+        expected[path] = fingerprint(path) if path.is_file() else None
+    atomic_batch(updates, expected=expected)
     return {"chapters": len(outputs), "outputs": outputs,
             "generation_manifest": str(manifest_path), "submission_ready": False}
 

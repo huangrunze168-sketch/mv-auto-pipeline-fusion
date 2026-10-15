@@ -9,9 +9,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
+import hashlib
+try:
+    from .pipeline_contracts import REFERENCE_INTENTS, timeline_errors, digest, number
+    from .director_review_gate import approved
+except ImportError:
+    from pipeline_contracts import REFERENCE_INTENTS, timeline_errors, digest, number
+    from director_review_gate import approved
 
 
 MENTION_RE = re.compile(
@@ -22,11 +30,7 @@ SUBJECT_BINDING_KINDS = {
 }
 SUBJECT_ID_FIELDS = ("subject_id", "asset_id", "mention_id", "url")
 OMNI_REFERENCE_MODALITIES = {"image", "video", "audio"}
-OMNI_REFERENCE_INTENTS = {
-    "character_identity", "wardrobe", "location", "composition", "storyboard",
-    "camera_motion", "action_timing", "performance_timing", "voice", "sound",
-    "material", "lighting", "style",
-}
+OMNI_REFERENCE_INTENTS = REFERENCE_INTENTS
 REQUIRED_REFERENCE_MODE = "omni_reference"
 
 
@@ -55,7 +59,8 @@ def _has_asset_locator(binding: dict[str, Any]) -> bool:
     return any(str(source.get(key, "")).strip() for key in ("asset_id", "url"))
 
 
-def validate_submission_contract(contract: dict[str, Any]) -> list[str]:
+def validate_submission_contract(contract: dict[str, Any], project: Path | None = None,
+                                 *, structural_only=False) -> list[str]:
     """返回提交包错误；空列表表示可以交给外部适配器提交。"""
 
     errors: list[str] = []
@@ -154,23 +159,151 @@ def validate_submission_contract(contract: dict[str, Any]) -> list[str]:
                 errors.append(f"{modality} 参考数量 {count} 超过后端上限 {limit}")
 
     edit_shots = contract.get("edit_shots") or []
+    if not isinstance(edit_shots, list):
+        errors.append("edit_shots 必须是列表")
+        edit_shots = []
+    previous_end = None
+    seen_shot_ids: set[str] = set()
+    for index, shot in enumerate(edit_shots):
+        if not isinstance(shot, dict):
+            errors.append(f"edit_shots[{index}] 必须是对象")
+            continue
+        sid = shot.get("id")
+        if not isinstance(sid, str) or not sid.strip() or sid in seen_shot_ids:
+            errors.append(f"edit_shots[{index}] 镜头 ID 为空或重复")
+        else:
+            seen_shot_ids.add(sid)
+        window = shot.get("window") or {}
+        if not isinstance(window, dict):
+            errors.append(f"{sid or index} window 必须是对象")
+            continue
+        try:
+            start_raw = shot.get("start_sec", window.get("start"))
+            end_raw = shot.get("end_sec", window.get("end"))
+            if isinstance(start_raw, bool) or isinstance(end_raw, bool):
+                raise ValueError
+            start, end = float(start_raw), float(end_raw)
+            if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append(f"{sid or index} 镜头时间窗缺失、非有限数或倒序")
+            continue
+        if previous_end is not None and abs(start - previous_end) > 1e-6:
+            errors.append(f"{sid} 镜头时间窗重叠、倒序或不连续")
+        previous_end = end
     if len(edit_shots) > 1:
         if capabilities.get("multi_shot") is not True:
             errors.append("多镜生成包所选后端未核验 multi_shot 能力")
         if capabilities.get("timestamp_control") is not True:
             errors.append("多镜生成包所选后端未核验 timestamp_control 能力")
         for shot in edit_shots[:-1]:
+            if not isinstance(shot, dict):
+                continue
             if not str(shot.get("cut_relation", "")).strip():
                 errors.append(f"{shot.get('id', 'unknown')} 缺少 cut_relation")
 
     if contract.get("director_cut_status") != "approved":
         errors.append("提交前必须通过导演剪辑门禁 director_cut_status=approved")
 
+    if not structural_only:
+        errors.extend(timeline_errors(edit_shots, contract.get("duration_sec")))
+        limits = capabilities.get('reference_limits') or {}
+        for modality in OMNI_REFERENCE_MODALITIES:
+            count = sum(isinstance(b, dict) and b.get('modality') == modality for b in bindings)
+            limit = limits.get(modality)
+            if count and (type(limit) is not int or limit < count):
+                errors.append(f'{modality}参考输入上限未严格核验或已超限')
+        if capabilities.get("timestamp_control") is not True:
+            errors.append("正式提交必须核验timestamp_control")
+        for binding in bindings:
+            if isinstance(binding, dict) and (binding.get("binding_status") != "uploaded"
+                    or not binding.get("source", {}).get("sha256")):
+                errors.append("提交素材必须uploaded并保留来源SHA-256")
+        try:
+            cost = number(contract.get("estimated_cash_cny"))
+            budget = number(contract.get("cash_limit_cny"))
+            if cost < 0 or budget < cost:
+                raise ValueError
+            limit = number(capabilities.get("max_duration_sec"))
+            if number(contract.get("duration_sec")) > limit:
+                raise ValueError
+            if contract.get("resolution") not in capabilities.get("resolutions", []):
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append("预算/估价/模型时长/分辨率未核验或超出上限")
+        if project is None:
+            errors.append("正式提交须提供project_dir以核验项目、章节和审片事实")
+        else:
+            try:
+                project = Path(project).resolve()
+                try:
+                    from .animatic_review import require as require_animatic
+                except ImportError:
+                    from animatic_review import require as require_animatic
+                require_animatic(project)
+                try:
+                    from .visual_development import require as require_development
+                    from .chapter_plan_build import require_director_final_cut, require_production_timing
+                except ImportError:
+                    from visual_development import require as require_development
+                    from chapter_plan_build import require_director_final_cut, require_production_timing
+                storyboard = json.loads((project / "state/storyboard.json").read_text(encoding="utf-8"))
+                style = json.loads((project / "state/style.json").read_text(encoding="utf-8"))
+                timeline = json.loads((project / "state/timeline.json").read_text(encoding="utf-8"))
+                edit = json.loads((project / "state/visual_edit_plan.json").read_text(encoding="utf-8"))
+                require_development(project, storyboard, style)
+                require_production_timing(timeline, storyboard["shots"])
+                require_director_final_cut(edit, storyboard["shots"])
+                cid = contract["chapter_id"]
+                plan = json.loads((project / "state/chapter_plan.json").read_text(encoding="utf-8"))
+                chapter = next(c for c in plan["chapters"] if c["id"] == cid)
+                if contract.get("project_id") != str(project):
+                    errors.append("提交项目ID不一致")
+                package_path = project / "prompts/chapters" / f"{cid}.json"
+                if contract.get("source_package_sha256") != digest(package_path):
+                    errors.append("提交章节制作包指纹已过期")
+                package = json.loads(package_path.read_text(encoding="utf-8"))
+                if prompt != package.get("prompt"):
+                    errors.append("提交提示词与批准制作包不一致，须重新编译和审查")
+                if plan.get("source_storyboard_fingerprint") != digest(project / "state/storyboard.json"):
+                    errors.append("章节计划来自旧分镜")
+                beats = package["beats"]
+                expected = [(b["shot_id"], b["start_sec"], b["end_sec"]) for b in beats]
+                actual = [(s["id"], s.get("start_sec", s.get("window", {}).get("start")),
+                           s.get("end_sec", s.get("window", {}).get("end"))) for s in edit_shots]
+                if actual != expected or number(contract["duration_sec"]) != number(chapter["duration_sec"]):
+                    errors.append("提交镜头时间与批准章节不一致")
+                sources = {b["handle"].replace(" ", ""): b for b in package["reference_bindings"]}
+                for binding in bindings:
+                    source = sources.get(_binding_handle(binding))
+                    if not source or binding["source"].get("sha256") != source["source"].get("sha256"):
+                        errors.append("上传参考与制作包来源不一致")
+                    elif source["source"].get("local_path"):
+                        if digest(project / source["source"]["local_path"]).removeprefix("sha256:") != str(
+                                binding["source"]["sha256"]).removeprefix("sha256:"):
+                            errors.append("参考本地文件已变化")
+                    if source and (binding.get("modality") != source.get("modality") or
+                                   binding.get("intents") != source.get("intents")):
+                        errors.append("提交参考职责与批准制作包不一致")
+                if set(sources) != {_binding_handle(b) for b in bindings}:
+                    errors.append("提交参考集合不完整")
+                expected_prompt_sha256 = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+                if contract.get("prompt_sha256") != expected_prompt_sha256:
+                    errors.append("提交提示词指纹不匹配")
+                if cid != plan["production_policy"]["prototype_chapter"]:
+                    ok, failures = approved(project)
+                    if not ok:
+                        errors.extend("批量审片未通过: " + f for f in failures)
+                elif contract.get("submission_phase") != "prototype":
+                    errors.append("代表章提交阶段必须为prototype")
+            except (OSError, ValueError, KeyError, StopIteration, TypeError) as exc:
+                errors.append(f"提交项目绑定校验失败: {exc}")
+
     return errors
 
 
-def require_submission_contract(contract: dict[str, Any]) -> None:
-    errors = validate_submission_contract(contract)
+def require_submission_contract(contract: dict[str, Any], project: Path | None = None) -> None:
+    errors = validate_submission_contract(contract, project)
     if errors:
         raise ValueError("后端提交包未通过：" + "；".join(errors))
 
@@ -178,9 +311,10 @@ def require_submission_contract(contract: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="校验外部视频后端提交契约")
     parser.add_argument("manifest", type=Path)
+    parser.add_argument("--project-dir", type=Path, required=True)
     args = parser.parse_args()
     contract = json.loads(args.manifest.read_text(encoding="utf-8"))
-    errors = validate_submission_contract(contract)
+    errors = validate_submission_contract(contract, args.project_dir)
     print(json.dumps({"pass": not errors, "errors": errors}, ensure_ascii=False, indent=2))
     return 0 if not errors else 1
 

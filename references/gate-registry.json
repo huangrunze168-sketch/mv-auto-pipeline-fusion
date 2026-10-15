@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "gates": [
+    {
+      "id": "crew_rehearsal",
+      "phase": "pre_prompts",
+      "entry": "prompt_build.py -> crew_rehearsal.require_before_prompts",
+      "owner": "machine_and_review",
+      "inputs": [
+        "development",
+        "storyboard",
+        "director_catalog"
+      ],
+      "failure_exit": 1,
+      "limits": "基础结构返工与制作桌，不是艺术批准"
+    },
+    {
+      "id": "animatic",
+      "phase": "pre_generation",
+      "entry": "animatic_review.py init/check",
+      "owner": "machine_and_review",
+      "inputs": [
+        "actual_animatic",
+        "design",
+        "timecoded_review"
+      ],
+      "failure_exit": 1
+    },
+    {
+      "id": "1",
+      "phase": "timing",
+      "entry": "gate_checks.py gate1",
+      "owner": "machine",
+      "inputs": [
+        "timeline",
+        "lyrics",
+        "audio"
+      ],
+      "failure_exit": 1
+    },
+    {
+      "id": "2",
+      "phase": "style",
+      "entry": "SKILL.md 风格确认",
+      "owner": "human",
+      "inputs": [
+        "style"
+      ],
+      "failure_exit": null
+    },
+    {
+      "id": "3",
+      "phase": "identity",
+      "entry": "submission_contract.py",
+      "owner": "external_adapter",
+      "inputs": [
+        "character",
+        "upload_receipt"
+      ],
+      "failure_exit": 1
+    },
+    {
+      "id": "4",
+      "phase": "design",
+      "entry": "visual_development.py / crew_pipeline.py",
+      "owner": "machine_and_review",
+      "inputs": [
+        "development",
+        "storyboard"
+      ],
+      "failure_exit": 1
+    },
+    {
+      "id": "5",
+      "phase": "prompts",
+      "entry": "gate_checks.py gate5",
+      "owner": "machine",
+      "inputs": [
+        "prompts",
+        "development",
+        "style",
+        "storyboard"
+      ],
+      "failure_exit": 1
+    },
+    {
+      "id": "6",
+      "phase": "edit",
+      "entry": "gate_checks.py gate6",
+      "owner": "machine",
+      "inputs": [
+        "storyboard",
+        "timeline"
+      ],
+      "failure_exit": 1
+    },
+    {
+      "id": "7",
+      "phase": "submission",
+      "entry": "submission_contract.py --project-dir",
+      "owner": "external_adapter",
+      "inputs": [
+        "package",
+        "references",
+        "model_receipt",
+        "budget"
+      ],
+      "failure_exit": 1
+    },
+    {
+      "id": "7.5",
+      "phase": "prototype",
+      "entry": "director_review_gate.py check",
+      "owner": "machine_and_review",
+      "inputs": [
+        "review",
+        "media",
+        "dependencies"
+      ],
+      "failure_exit": 1
+    },
+    {
+      "id": "8",
+      "phase": "batch",
+      "entry": "external scheduler + ledger.py",
+      "owner": "external_adapter",
+      "inputs": [
+        "review",
+        "reservation",
+        "clips"
+      ],
+      "failure_exit": 1
+    },
+    {
+      "id": "8.5",
+      "phase": "repair",
+      "entry": "visual_revision.py",
+      "owner": "machine_and_review",
+      "inputs": [
+        "failure_evidence",
+        "repair_plan"
+      ],
+      "failure_exit": 1
+    },
+    {
+      "id": "delivery",
+      "phase": "final",
+      "entry": "stitch_chapters.py + delivery_state.py check + align_verify.py + full_sequence review",
+      "owner": "machine_and_review",
+      "inputs": [
+        "actual_media",
+        "master",
+        "chapter_reviews",
+        "delivery_record",
+        "verification_report"
+      ],
+      "failure_exit": 1
+    }
+  ],
+  "check_count_policy": "读取实际gates报告checks，不使用20/20硬编码",
+  "only_gate_checks_subcommands": [
+    "gate1",
+    "gate5",
+    "gate6"
+  ]
+}

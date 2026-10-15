@@ -105,6 +105,9 @@ Remix 使用两个 Scene Master JSON 比较一个变量；局部修复计划包�
 ```bash
 python scripts/storyboard_build.py PROJECT --fps 24
 python scripts/visual_development.py PROJECT
+python scripts/crew_pipeline.py PROJECT
+# 可选；PROFILE 必须由合法 annotation-only 语料构建
+python scripts/film_grammar_corpus.py audit PROJECT PROFILE
 python scripts/prompt_build.py PROJECT
 python scripts/gate_checks.py gate5 PROJECT
 python scripts/gate_checks.py gate6 PROJECT
@@ -141,7 +144,7 @@ python scripts/stitch_chapters.py PROJECT
 
 ## 迁移
 
-旧项目不自动改剧情、窗口或资产。旧 storyboard 需按本契约补充 visual_edit_plan、development、state_before/after、motion_design 后重建；提示词重新过关5，图片重新核对并登记。原媒体保留。
+旧项目不自动改剧情、窗口或资产。旧 storyboard 需按本契约补充 visual_edit_plan、development、state_before/after、motion_design，以及 V1.5 的 `crew_bible`、场景美术/灯光和逐镜 `crew` 后重建；提示词重新过关5，图片重新核对并登记。原媒体保留。电影语法画像是可选证据层，不会自动改写旧镜头。
 
 艺术创作与实际观察由 Agent/用户完成；工具不会宣称靠字段检查就获得“爆款质感”。对应回归覆盖音乐引用、跨行歌词、导演缺失/强度、连续性、资产失效、三层提示词、后端中立与素材选段。
 

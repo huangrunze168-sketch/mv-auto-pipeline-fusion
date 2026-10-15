@@ -18,6 +18,10 @@ import json
 import math
 import wave
 from pathlib import Path
+try:
+    from .pipeline_contracts import atomic_batch
+except ImportError:
+    from pipeline_contracts import atomic_batch
 
 SR = 16000
 HOP = 400
@@ -62,8 +66,8 @@ def main():
              if ln.strip()]
     if not lines:
         raise ValueError("歌词文件没有非空歌词行")
-    if a.intro < 0 or a.outro < 0:
-        raise ValueError("--intro/--outro 不能为负数")
+    if not all(math.isfinite(value) and value >= 0 for value in (a.intro, a.outro)):
+        raise ValueError("--intro/--outro 必须是非负有限数")
 
     # 优先在检测到的活动区间内扣除前后留白；短音频或留白过大时逐级回退，
     # 但绝不为了“每行至少 1 秒”把时间轴写到音频时长之外。
@@ -85,7 +89,9 @@ def main():
 
     tl = {"song": a.song, "source_audio": source_audio, "duration_sec": round(dur, 3),
           "fps_assumed": 24, "asr_engine": "uniform_fallback",
-          "lyrics_source": "official", "lines": [], "segments": [], "pending_review": []}
+          "lyrics_source": "user_supplied", "authority": "provisional_fallback",
+          "production_timing_verified": False,
+          "lines": [], "segments": [], "pending_review": []}
     if a.master_audio:
         master = Path(a.master_audio).resolve()
         if not master.is_file():
@@ -95,27 +101,30 @@ def main():
         except ValueError:
             tl["master_audio"] = str(master)
     if span0 > 0.001:
-        tl["lines"].append({"index": 0, "type": "interlude", "text": "",
+        tl["lines"].append({"index": len(lines) + 1, "type": "interlude", "text": "",
                             "start": 0.0, "end": round(span0, 3),
                             "confidence": 1.0, "corrected": False})
     for k, text in enumerate(lines):
         s, e = span0 + k * step, span0 + (k + 1) * step
+        if round(s, 3) >= round(e, 3):
+            raise ValueError("歌词行数超过当前毫秒时间精度，拒绝产生零时长窗口")
         tl["lines"].append({"index": k + 1, "type": "vocal", "text": text,
                             "start": round(s, 3), "end": round(e, 3),
                             "confidence": 0.30, "corrected": False})
         tl["pending_review"].append(k + 1)
     if dur - span1 > 0.001:
-        tl["lines"].append({"index": len(lines) + 1, "type": "interlude", "text": "",
+        tl["lines"].append({"index": len(lines) + 2, "type": "interlude", "text": "",
                             "start": round(span1, 3), "end": round(dur, 3),
                             "confidence": 1.0, "corrected": False})
     if not any(ln["type"] == "interlude" for ln in tl["lines"]):
         tl["no_interlude"] = True
 
-    Path(a.out_json).parent.mkdir(parents=True, exist_ok=True)
-    Path(a.out_json).write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")
     lrc = "\n".join(f"[{int(ln['start']//60):02d}:{ln['start']%60:05.2f}]{ln['text']}"
                     for ln in tl["lines"] if ln["type"] != "interlude")
-    Path(a.out_json).with_suffix(".lrc").write_text(lrc + "\n", encoding="utf-8")
+    if Path(a.out_json).resolve() == Path(a.out_json).with_suffix(".lrc").resolve():
+        raise ValueError("时间轴与LRC输出路径必须不同")
+    atomic_batch({Path(a.out_json): json.dumps(tl, ensure_ascii=False, indent=2),
+                  Path(a.out_json).with_suffix(".lrc"): lrc + "\n"})
     print(json.dumps({"engine": "uniform_fallback", "lines": len(lines),
                       "active_span": [span0, span1], "duration_sec": round(dur, 3),
                       "pending_review": len(tl["pending_review"])}, ensure_ascii=False))

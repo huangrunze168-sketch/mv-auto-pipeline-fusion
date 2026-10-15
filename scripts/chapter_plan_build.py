@@ -67,6 +67,12 @@ def require_production_timing(timeline: dict, shots: list[dict]) -> None:
     """临时/待核时间轴可做视觉设计，但不得进入正式口型视频准备。"""
     if not any(bool(shot.get("lip_sync")) for shot in shots):
         return
+    try:
+        from .pipeline_contracts import timing_authority
+    except ImportError:
+        from pipeline_contracts import timing_authority
+    if timing_authority(timeline) != "production":
+        raise ValueError("口型章节禁止使用临时或待核时间轴: 统一时间权威门禁未通过")
     authority = str(timeline.get("authority", "")).lower()
     problems = []
     if timeline.get("production_timing_verified") is not True:

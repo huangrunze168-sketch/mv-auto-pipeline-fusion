@@ -1,18 +1,30 @@
 ---
 name: mv-auto-pipeline-fusion
 description: >
-  一首歌 + 一张图 → 一支口型对得上的音乐 MV。
-  十二步全链流程：从歌词时间轴到成片对齐验收，八道关机检兜底。
+  音乐 MV 的剧组设计、模型中立提示词编译、门禁与本地剪辑工作流。
+  用户选择生成后端；机器契约检查与实际动态审片分别验收。
   触发词：做 MV、音乐视频、口型对齐、MV 流水线、给这首歌出画面。
 ---
 
-# MV-AUTO-PIPELINE-FUSION · 音乐 MV 全自动生成 SOP（V1.4.3）
+# MV-AUTO-PIPELINE-FUSION · 音乐 MV 协作工作流（V1.7.0）
 
 > 一句话需求：**给一首歌和一张图，出来一支完整的、口型对得上的音乐 MV。**
 > 技术基线：全 API（无需 GPU）· 运行形态：Agent Skill。
+> 流程修订：首次视频生成前须完成剪辑预演批准；样片依赖按公共锁＋本章限定；全片先正式选段渲染、候选预览、审片，再最终合成，批准后禁止重写剪辑清单。
+> V1.7.0：补齐A06–A36的审批、提交、严格时间轴、空间连续性、真实交付核验、事务与成本门禁。正式执行先读取 `references/production-hardening.md`；不自动批准、不调用默认后端。
+> V1.6.1：修复画像入口漏检、全片灯光依赖失效、圆周角差、提交时间窗与审片时间码范围五项门禁反例；旧资产需重新复核设计指纹。
+> V1.6.0：八部门从“各自填表”升级为带验收条件的交接图；逐镜补齐构图、焦段、灯光物理、美术状态、演员路径、声画转场与场景覆盖角色，并增加注意力刷新门禁。
+> V1.5.0：引入 AI 剧组制工作流。导演、编剧、摄影、灯光、场景美术、人物美术、演员调度和剪辑分别产出可检查交接物；基础视听语言通过后才允许叠加导演风格。
 > V1.4.3：按视频模型真实“多模态全能参考”语义重写生成包：素材逐项绑定职责，单个生成包容纳多个定时剪辑镜头，提示词显式写切点、衔接与状态变化；模型时长上限不得当成剪辑镜头长度。
 > V1.4.2：新增外部后端角色引用门禁；条件音频与最终母带严格分离。
 > V1.4.1：在完整 ZY 链路上新增导演级 Scene Master 硬契约，分离静帧瞬间与视频动作，阻断临时时间轴进入正式口型章节，并明确静态审查不等于艺术质量或用户接受。原始母带保持独立，生成后端由用户选择。
+
+## 参考驱动的序列重设计
+
+本次新版创作采用 `creative_workflow_revision=2`，先读 `references/sequence-direction-workflow.md`。
+禁止用循环角度、等分音乐时间或平均镜长生成创作决策。先提取有路径、SHA、原始区间的参考段落，明确标注阅读与实际观看的区别；逐镜写参考怎样改变观看对象、物理机位、人物路径、光源、美术与切点，再编译。
+`state/sequence_direction.json` 是序列交接，不替代 ZY Scene Master；正式分镜须保留同一份逐镜执行事实。提示词入口检查一致性，预演和审片绑定它及参考文件。机器通过不代表好看。
+先跑全曲带原始音乐的低成本预演，检查信息推进、空间关系、高潮与音乐。未经实际观看不得填写批准；预演通过以后才生成必要母版/关键帧和代表样片，失败返工对应段落，不批量扩图。
 
 ## 输入 / 输出
 
@@ -50,18 +62,18 @@ project/
 ├── prompts/          # SHxxx.json（六段式提示词）
 ├── clips/            # 逐段生成视频 + 时长贴合后版本
 ├── output/           # 成片 + 验收报告
-└── gates/            # 八道关 HTML 页面
+└── gates/            # 实际运行门禁的 JSON / HTML 证据
 ```
 
-## 十二步 · 八道关
+## 十二步 · 分阶段门禁
 
 | 步 | 内容 | 关 | 硬门禁 |
 |---|---|---|---|
 | 1 | 歌词提取与强制对齐：ASR API 只给时间，文本用官方歌词校正 → timeline.json（权威时间基准诞生地） | 关 1 | |
 | 2 | 音乐结构、全片导演提案与视觉目标；风格先于场景资产，但人物图服装锁优先于系统风格补全 | 关 2 | |
 | 3 | Reference Roles 与人物锁；需要参考视觉分析时调用 Medium Router / Dream Decode，记录实际观察范围 | 关 3 | |
-| 4 | Story Visual Development + Source Ledger + 导演路由 + Continuity Bible；逐镜写意图/阻力/单一瞬间/观众信息/真实机位/画框边界/观察验收，再用音乐引用设计 visual_edit_plan | 关 4 | |
-| 5 | ZY 契约检查；分开编译场景母版、分镜关键帧与视频运动提示词；20 项逐镜检查及来源/依赖检查全过 | 关 5 | ⛔ 硬 |
+| 4 | Story Visual Development + Source Ledger + AI 剧组八部门蓝图 + Continuity Bible；先完成剧情因果、场景美术、灯光、摄影、调度和剪辑设计，再做导演路由 | 关 4 | |
+| 5 | ZY + Crew Pipeline 契约检查；阻断重复角度、轴线/动线错误、无地理建立、拖沓节奏和空泛舞美；分开编译场景母版、关键帧与视频运动提示词 | 关 5 | ⛔ 硬 |
 | 6 | 音乐窗口与口型核对：窗口首尾相接、合计=全曲长、口型与景别一致，**任何环节不许手写秒数** | 关 6 | ⛔ 硬 |
 | 7 | 场景母版候选比较、Remix 单轴变体与关键帧审查；资产批准后，用户所选后端按真实契约生成代表样片并完成动态/段落审片 | | |
 | 8 | 批量生成：多路并发、断点续跑、在途任务救回；每 10–15 分钟主动汇报 | | |
@@ -78,12 +90,19 @@ project/
 - **B 中近景承载口型**：大特写 / 特写 / 近景 / 中景允许口型；其他景别不对口型。景别与演唱分配由导演方案决定，不轮换；口型占比与连续上限在项目 performance_policy 中显式配置，不再强加全项目 45% 或连续三镜配额。
 - **C 唱歌不是说台词**：发声行走唱歌框架，一句歌词独立成行；禁止「说某某话」写法。不对口型段强制注入「嘴唇自然闭合、不跟随人声开合」声明 + 负面提示压口型。字段名 / 标签英文，叙述 / 歌词中文。
 - **D 不猜、不烧冤枉钱**：先拉真实节点表体检再提交；共享模板去参考化；母带与参考图指纹缓存全片只传一次；失败任务回挖真实原因。账号降级、双池并行、真钱封顶是三个独立开关。
-- **E 八道关 + 对齐三验**：任一验不过，不许说「做完了」。
+- **E 分阶段门禁与实际交付验收**：任一必需验不过，不许说「做完了」。入口/执行者按registry；包络不等于口型证据。
 - **F 会自己长本事**：每支 MV 收尾必复盘，沉淀三处缺一不算修好，改完必须发版（全量自检 + 快照 + 标签），回退前先备份。
 
 ## 关键机制
 
+- **创作质量开发**：处理镜头乱、拖沓、平庸美术/灯光时先读 `references/creative-crew-development.md`。先做无风格故事、空间/光线与带音乐预演，再选导演方法；不得只加提示词或规则数量。`crew_execution.py`将八部门事实编译成逐镜执行句；`prompt_build.py`输出 `prompts/cut_rehearsal.json` 作为切点审片提纲，不自动标记已观看。
+- **完整导演库发现**：`scripts/director_catalog.py`从实际ZY索引发现所有导演及文件SHA，不限于少数预设。按目标读取推荐矩阵和匹配候选，不整库堆叠，不每镜换导演；不存在的方法不得声称已调用。
+
+- **剪辑预演批准**（`scripts/animatic_review.py`）：实际预演视频带原始音乐并完整覆盖全曲，审信息推进、高潮、音乐节奏与切镜关系四项，填写动态时间码证据。init仅创建pending；submission_contract在首次生成及后续提交前检查当前批准。预演不证明真实运动、表演或口型。
+- **审批顺序与范围**：代表章/逐章审片仅绑定公共锁及本章故事、场景、提示词、音频和引用资产；无关章节变化不撤销样片，公共人物/服装/音乐/风格/部门bible变化会撤销。正式选段渲染→全片候选预览→全片审片→最终合成；批准后edit_assemble拒绝重写，修改须invalidate→改剪辑→refresh→重新审片。
 - **ZY 开发契约**（`scripts/visual_development.py`）：检查 treatment、已读来源、事实/解释/提案、参考职责、视觉规律、实际导演文件指纹、逐镜激活轴与观察依据、连续性前后状态及动作起止。指定导演而无路由决策时阻断，未激活轴保留，不自动“增强”强度。
+- **AI 剧组契约**（`scripts/crew_pipeline.py`）：八部门分别写全片级 bible、场景级美术/灯光方案和逐镜执行值；检查 30 度规则、180 度轴线、人物入出画方向、地理建立、双向剪辑关系、重复机位、视觉变化、平均镜长、连续慢镜和开场钩子。`style_application_order=after_film_grammar` 是硬门禁，导演风格不能替代基本视听语言。
+- **电影语法参考库**（`scripts/film_grammar_corpus.py`）：使用标注做建议性统计，数量不等于合法来源和标注质量验收；当前画像保持exploratory_only，可信生产验收未实现，enforce_envelope始终阻断。双来源导入见 `references/dual-source-reference.md`，不得冒充高分电影生产画像。
 - **资产依赖**（`scripts/visual_assets.py`）：场景母版与关键帧分别登记，批准须带实际观察证据；关键帧引用同场景母版版本。母版/人物/上游记录改变后，受影响资产必须复核。登记工具记录审查，不替人看图。
 - **单轴比较与修复**（`scripts/visual_revision.py`）：Remix 检查一个主要变量及允许后果；修复计划必须提供主因、实际漂移证据、CHANGE ONLY / PRESERVE EXACTLY。工具不代替视觉判断，也不提交生成任务。
 - **素材剪辑**（`scripts/edit_assemble.py`）：从 generated_clips 与 edit_selection 按帧选取已审素材；生成片段长度不等于剪辑镜头长度。只在显式 --render 时本地裁切，校验长度/帧率/指纹，不自动变速；正式合成消费已完成剪辑产物。
@@ -95,8 +114,8 @@ project/
 - **故事编译**（`scripts/prompt_build.py`）：强制要求 `story_mode=zy_story_visual_development`，从因果链、连续性与 Shot Delta 构造提示词，不再使用歌词动作模板。
 - **导演级 Scene Master**（`references/director-scene-master.md`）：`current_action/motion_design` 负责时间过程，`keyframe_moment` 负责单一静帧；真实机位、画框边界和可观察验收必须随镜头进入制作包。覆盖镜选中后必须先落为独立定时镜头。
 - **多场景预览成片**（`scripts/render_preview.py`）：优先把 `input/scene_*.png` 按歌曲章节分配给各镜；只有没有场景关键帧时才回退人物图。静帧仍只验证剪辑结构，口型与真实运动需走视频 API。
-- **时长贴合**（`scripts/duration_fit.py`）：帧网格对齐（护栏 1e-4），帧数已合时流复制跳过重编码；计量用 nb_frames/fps，不信容器时长。
-- **对齐三验**（`scripts/align_verify.py`）：包络 + 局部搜索，纯标准库：① 各段时长合计 = 原曲长 ② 逐段波形最优滞后 ≈ 0 且相关度达标 ③ 对口型段人声能量非空。
+- **时长贴合**（`scripts/duration_fit.py`）：帧数按输入实际帧率解释；同帧率且CFR核验通过才可流复制。
+- **对齐诊断**（`scripts/align_verify.py`）：分开记录计划镜长、实际视频长度、候选音轨；正式检测必须同时绑定真实候选视频与音轨。self_reference只给DIAGNOSTIC_PASS，混音能量不能证明人声或口型正确。
 - **成本台账**（`scripts/ledger.py`）：币与真钱分列，调度动作全留痕；总览三数——成片多少秒、机器跑了多久、花了多少。
 - **电影化提示词构造**（`references/zy-cinematic-integration.md`）：使用 `vendor/zy-cinematic-realism/` 的 Scene Master、Creative Grammar、连续性与局部修复方法；只负责视觉构造，不得改写 timeline 窗口、歌词、口型、音频策略或后端契约。
 - **长视频章节**（`scripts/chapter_plan_build.py`）：模型最大时长是硬上限，ZY 故事断点优先；每章继续携带 Continuity Bible 与逐镜 Shot Deltas。
@@ -120,6 +139,7 @@ project/
 
 ## 详细规格（references/）
 
+- `references/production-hardening.md` — A06–A36迁移、审批层级、事务恢复、成本与能力边界；正式执行必读
 - `references/visual-workflow-contract.md` — V1.4 数据、执行顺序、迁移与命令
 - `references/director-scene-master.md` — 真实导演拍摄感的 Scene Master、覆盖镜与验收边界
 - `references/mv-visual-development-plan.md` — 深度视觉开发设计依据
@@ -137,9 +157,11 @@ project/
 
 - `references/architecture.md` — 四层架构与数据流
 - `references/data-schemas.md` — timeline / storyboard / prompt / ledger 全 schema
-- `references/gates-spec.md` — 八道关逐项机检规格
+- `references/gates-spec.md` — 业务门禁规格，实际入口以 `references/gate-registry.json` 为准
 - `references/prompt-framework.md` — 六段式提示词框架与 20 项机检
 - `references/zy-cinematic-integration.md` — ZY Cinematic Realism → MV 六段式提示词适配与优先级
 - `references/omni-reference-video.md` — 全能参考的真实含义、ZY 编译方法与分时多镜提示词结构
+- `references/crew-production-pipeline.md` — AI 剧组八部门、视听语言、节奏、美术与灯光交接规范
+- `references/film-grammar-corpus.md` — 数百部电影标注的合法接入、匿名画像与项目审计规范
 - `references/api-backends.md` — 全 API 依赖清单与成本模型
 - `vendor/zy-cinematic-realism/` — 造梦师 v2.5.0 原名上游组件（步骤 5 按需加载；CC BY-NC 4.0，作者 ZY / popopo-99，详见目录内 `LICENSE` / `NOTICE.md`）

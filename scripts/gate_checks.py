@@ -5,7 +5,7 @@ gate_checks.py — 关5/关6 硬门禁机检器（纯标准库）
 
 用法:
   python gate_checks.py gate1 <project_dir>            # 校验 timeline.json（关1）
-  python gate_checks.py gate5 <project_dir>            # 校验 prompts/*.json，20 项机检
+  python gate_checks.py gate5 <project_dir>            # 校验 prompts/*.json，检查数读实际报告
   python gate_checks.py gate6 <project_dir>            # 校验 storyboard.json 窗口与口型
 
 退出码: 0 = 全绿放行; 1 = 存在失败项（硬门禁阻断）
@@ -128,11 +128,25 @@ def check_timeline(tl: dict, lyrics_text: str, audio_duration: float = None) -> 
     # ① 行数与官方歌词一致（非空行）
     official_lines = [ln.strip() for ln in lyrics_text.splitlines() if ln.strip()]
     if official_lines:
-        lyrics_ok = len(vocal) == len(official_lines)
+        import unicodedata
+        normalize = lambda value: "".join(unicodedata.normalize("NFKC", str(value)).split())
+        lyrics_ok = [normalize(line.get("text", "")) for line in vocal] == [normalize(line) for line in official_lines]
     else:
         lyrics_ok = tl.get("lyrics_source") == "asr_only" and bool(vocal)
     add("歌词一行不能少", lyrics_ok,
         f"timeline={len(vocal)} official={len(official_lines)} source={tl.get('lyrics_source')}")
+    import math
+    ids = [line.get("index") for line in tl.get("lines", [])]
+    valid = all(type(i) is int and i > 0 for i in ids) and len(ids) == len(set(ids))
+    for line in tl.get("lines", []):
+        try:
+            if isinstance(line["start"], bool) or isinstance(line["end"], bool):
+                raise ValueError
+            start, end = float(line["start"]), float(line["end"])
+            valid &= math.isfinite(start) and math.isfinite(end) and 0 <= start < end <= float(tl["duration_sec"])
+        except (ValueError, TypeError, KeyError):
+            valid = False
+    add("歌词索引唯一且时间正向有限", valid)
 
     # ② 时间单调递增无重叠
     seq = tl.get("lines", [])
@@ -163,7 +177,7 @@ def check_timeline(tl: dict, lyrics_text: str, audio_duration: float = None) -> 
     return checks
 
 
-# ---------------- 关5 · 20 项机检 ----------------
+# ---------------- 关5 · 提示词与项目依赖机检 ----------------
 
 def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
                  shot: dict = None) -> list:
@@ -260,10 +274,22 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
 
     # ---- 扩展项 #12-#14（具体瞬间/场景母版/参考职责）----
 
-    # 12 具体瞬间：performance 含具体动作词
+    # 12 检查已设计动作是否完整传递；动词词表不能证明语义质量，也不能
+    # 因“压下把手/攥紧钥匙”等合法动作不在词表而误拒真实制作包。
     hit = [w for w in ACTION_WORDS if w in perf]
-    add(12, "具体瞬间（含动作词）", len(perf.strip()) >= 10 and bool(hit),
-        f"actions={hit[:3]} len={len(perf.strip())}")
+    if shot is not None:
+        master = (pr.get("direction") or {}).get("scene_master") or {}
+        action = shot.get("current_action")
+        moment = shot.get("keyframe_moment")
+        action_ok = (isinstance(action, str) and bool(action.strip()) and action in perf
+                     and master.get("current_action") == action
+                     and isinstance(moment, str) and bool(moment.strip())
+                     and master.get("keyframe_moment") == moment)
+        add(12, "动作与关键帧事实完整传递", action_ok,
+            "核对设计传递，不认证动作自然或艺术质量；词表仅辅助=" + str(hit[:3]))
+    else:
+        add(12, "旧格式具体瞬间启发式", len(perf.strip()) >= 10 and bool(hit),
+            f"legacy_heuristic_only actions={hit[:3]} len={len(perf.strip())}")
 
     # 13 场景母版一致：scene 命中锁定关键词
     sm = style.get("scene_master", {})
@@ -332,6 +358,12 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
 # ---------------- 关6 · 窗口与口型 ----------------
 
 def check_storyboard(sb: dict, timeline: dict) -> list:
+    try:
+        from .pipeline_contracts import unique_ids
+    except ImportError:
+        from pipeline_contracts import unique_ids
+    if not unique_ids(sb.get("shots", [])):
+        return [{"item": "分镜ID唯一非空", "pass": False, "evidence": "先修正schema与唯一性"}]
     shots = sorted(sb.get("shots", []), key=lambda s: s["window"]["start"])
     song_dur = float(timeline.get("duration_sec", 0))
     checks = []
@@ -471,6 +503,11 @@ def main():
         print(__doc__)
         sys.exit(2)
     proj = Path(sys.argv[2])
+    try:
+        from .pipeline_contracts import require_no_transaction
+    except ImportError:
+        from pipeline_contracts import require_no_transaction
+    require_no_transaction(proj)
     timeline = load(proj / "state" / "timeline.json")
     # BUG-06 修法：style.json 在关2才产出，关1不得依赖它
     style = load(proj / "state" / "style.json") if (proj / "state" / "style.json").exists() else {}
@@ -483,6 +520,14 @@ def main():
         checks = check_timeline(timeline, lyrics,
                                 probe_audio_duration(audio_path) if audio_path else None)
         report = {"gate": 1, "checks": checks}
+        try:
+            from .pipeline_contracts import timing_authority
+        except ImportError:
+            from pipeline_contracts import timing_authority
+        report["timing_authority"] = timing_authority(timeline)
+        report["structural_pass"] = all(c["pass"] for c in checks)
+        report["production_allowed"] = report["structural_pass"] and report["timing_authority"] == "production"
+        report["stage"] = "production" if report["production_allowed"] else "provisional" if report["structural_pass"] else "structural_failed"
         all_ok = all(c["pass"] for c in checks)
         n_pass, n_total = sum(1 for c in checks if c["pass"]), len(checks)
         report["summary"] = {"pass": all_ok, "passed": n_pass, "total": n_total}
@@ -495,6 +540,13 @@ def main():
         all_ok = True
         storyboard_path = proj / "state" / "storyboard.json"
         storyboard = load(storyboard_path) if storyboard_path.exists() else {"shots": []}
+        try:
+            from .pipeline_contracts import unique_ids
+        except ImportError:
+            from pipeline_contracts import unique_ids
+        unique = unique_ids(storyboard.get("shots", []))
+        report["checks"].append({"item": "分镜ID唯一非空", "pass": unique})
+        all_ok &= unique
         shot_map = {s.get("id"): s for s in storyboard.get("shots", [])}
         prompt_ids = []
         file_ids = []
@@ -506,6 +558,19 @@ def main():
             file_ids.append(expected_id)
             shot = shot_map.get(prompt_id)
             checks = check_prompt(prompt, timeline, style, has_protagonist, shot)
+            if storyboard.get('story_mode') == 'zy_story_visual_development':
+                try:
+                    from .crew_execution import validate_motion_package
+                    from .pipeline_contracts import digest
+                except ImportError:
+                    from crew_execution import validate_motion_package
+                    from pipeline_contracts import digest
+                try:
+                    motion_errors = validate_motion_package(prompt, load(proj/'prompts/motion'/pf.name), digest(pf))
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    motion_errors = [f'运动包无法核验: {exc}']
+                checks.append({'item': '视频运动包完整保留剧组和导演事实', 'pass': not motion_errors,
+                               'evidence': '; '.join(motion_errors)})
             if shot is not None:
                 checks.append({"shot_id": prompt_id, "idx": 21, "item": "当前镜头设计指纹一致",
                                "pass": prompt.get("meta", {}).get("shot_design_fingerprint") == shot_fingerprint(shot),
@@ -521,7 +586,7 @@ def main():
         all_ok &= coverage_ok
         try:
             development = load(proj / "state" / "development.json")
-            dev_errors = validate_development(development, storyboard, style)
+            dev_errors = validate_development(development, storyboard, style, proj)
         except (OSError, ValueError) as exc:
             dev_errors = [str(exc)]
         report["checks"].append({"item": "ZY视觉开发来源与连续性契约", "pass": not dev_errors,

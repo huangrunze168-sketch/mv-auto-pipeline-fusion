@@ -23,13 +23,15 @@ def ffprobe_duration(path: str, fps: float = None) -> float:
     """优先用帧数×帧距计量（BUG-12 修法：mp4 容器时长会把末帧时基多报 1 帧，
     造成 +1帧/镜的测量假象；concat 后帧数严丝合缝，假数会污染台账）。"""
     if fps:
-        out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=nb_frames", "-of",
-             "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True)
-        if out.returncode == 0 and out.stdout.strip().isdigit():
-            return int(out.stdout.strip()) / fps
+        try:
+            from .media_verify import probe, ratio, is_cfr
+        except ImportError:
+            from media_verify import probe, ratio, is_cfr
+        stream = next(s for s in probe(path)["streams"] if s["codec_type"] == "video")
+        source_fps = ratio(stream["avg_frame_rate"])
+        if ("nb_read_frames" in stream and abs(source_fps-ratio(stream["r_frame_rate"]))<1e-6
+                and is_cfr(path, source_fps)):
+            return int(stream["nb_read_frames"])/source_fps
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", path],
@@ -40,7 +42,7 @@ def ffprobe_duration(path: str, fps: float = None) -> float:
 
 
 def fit(inp: str, outp: str, window: float, fps: float) -> dict:
-    if fps <= 0 or window <= 0:
+    if not math.isfinite(fps) or not math.isfinite(window) or fps <= 0 or window <= 0:
         raise ValueError("window_sec 和 --fps 必须大于 0")
     if Path(inp).resolve() == Path(outp).resolve():
         raise ValueError("input 与 output 不能是同一路径")
@@ -49,9 +51,16 @@ def fit(inp: str, outp: str, window: float, fps: float) -> dict:
     # 又须远小于半帧(24fps 半帧=0.021s)，才能同时挡住噪声与保住真小数窗口
     target = math.ceil(window * fps - 1e-4) / fps
     actual_in = ffprobe_duration(inp, fps)
+    try:
+        from .media_verify import probe, ratio, is_cfr
+    except ImportError:
+        from media_verify import probe, ratio, is_cfr
+    stream = next(s for s in probe(inp)["streams"] if s["codec_type"] == "video")
+    same_fps = (abs(ratio(stream["avg_frame_rate"])-fps)<1e-6
+                and abs(ratio(stream["r_frame_rate"])-fps)<1e-6 and is_cfr(inp, fps))
     # BUG-13 修法：帧数已精确等于目标时直接流复制——重编码路径的 fps+tpad+-t
     # 组合会在边界帧多塞 1 帧（实测每镜 +0.042s），破坏"合计=全曲长"
-    if round(actual_in * fps) == round(target * fps):
+    if same_fps and round(actual_in * fps) == round(target * fps):
         # 即使帧数已吻合，也必须去掉输入片段可能携带的音轨；直接 copyfile 会违背
         # “输出无音轨画面轨”的契约，并在最终母带重贴时制造双音轨。
         r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", inp,

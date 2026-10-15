@@ -26,7 +26,11 @@ from scripts.prompt_build import compile_director_method, keyframe_moment
 from scripts.storyboard_build import apply_story_plan, REQUIRED_STORY_FIELDS
 from scripts.render_preview import resolve_visual_asset
 from scripts.audio_master import resolve_master, master_encoding_args, probe_audio
-from scripts.submission_contract import validate_submission_contract
+from scripts.submission_contract import validate_submission_contract as validate_submission_structure
+
+def validate_submission_contract(contract):
+    """历史测试仅验证结构；正式提交身份在test_production_gates中验证。"""
+    return validate_submission_structure(contract, structural_only=True)
 from scripts.omni_reference import (
     build_omni_reference_blueprint, validate_omni_reference_blueprint,
 )
@@ -55,6 +59,7 @@ class PipelineTests(unittest.TestCase):
     def test_omni_blueprint_is_backend_neutral_and_routes_each_reference(self):
         chapter = {
             "id": "CH01",
+            "window": {"start": 0, "end": 4},
             "audio_asset": {"local_path": "input/chapter_audio/CH01.wav", "sha256": "audio"},
         }
         beats = [
@@ -206,8 +211,8 @@ class PipelineTests(unittest.TestCase):
             "audio_reference": {"condition_only": True},
             "request": {"generate_audio": False},
             "edit_shots": [
-                {"id": "SH001", "cut_relation": "动作匹配"},
-                {"id": "SH002"},
+                {"id": "SH001", "start_sec": 0.0, "end_sec": 2.0, "cut_relation": "动作匹配"},
+                {"id": "SH002", "start_sec": 2.0, "end_sec": 4.0},
             ],
             "director_cut_status": "approved",
         }
@@ -596,6 +601,7 @@ class PipelineTests(unittest.TestCase):
             (project / "state" / "timeline.json").write_text(json.dumps({
                 "source_audio": "input/song.wav", "master_audio": "input/song.wav",
                 "duration_sec": 1.0,
+                "production_timing_verified": True,
             }), encoding="utf-8")
             (project / "state" / "chapter_plan.json").write_text(json.dumps({
                 "chapters": [{
@@ -643,12 +649,62 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
             self.assertEqual(timeline["source_audio"], "input/short.wav")
+            self.assertEqual(timeline["lyrics_source"], "user_supplied")
+            self.assertIs(timeline["production_timing_verified"], False)
             self.assertTrue(timeline.get("no_interlude"))
             self.assertTrue(all(0 <= row["start"] < row["end"] <= 1.0
                                 for row in timeline["lines"]))
 
             storyboard = self.run_script("storyboard_build.py", project, "--fps", 24)
             self.assertEqual(storyboard.returncode, 0, storyboard.stderr)
+
+    def test_fallback_rejects_nonfinite_offsets_without_overwriting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wav = root / "song.wav"
+            lyrics = root / "lyrics.txt"
+            output = root / "timeline.json"
+            write_wav(wav, 1.0, silence=True)
+            lyrics.write_text("一行", encoding="utf-8")
+            output.write_bytes(b"old-timeline")
+            for argument in ("--intro", "--outro"):
+                for value in ("nan", "inf", "-inf"):
+                    with self.subTest(argument=argument, value=value):
+                        result = self.run_script("timeline_fallback.py", wav, lyrics, output,
+                                                 argument + "=" + value)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(output.read_bytes(), b"old-timeline")
+                        self.assertFalse(output.with_suffix(".lrc").exists())
+
+    def test_fallback_rejects_precision_collapse_without_publishing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wav = root / "song.wav"
+            lyrics = root / "lyrics.txt"
+            output = root / "timeline.json"
+            write_wav(wav, 0.01, silence=True)
+            lyrics.write_text("\n".join("歌词" for _ in range(100)), encoding="utf-8")
+            result = self.run_script("timeline_fallback.py", wav, lyrics, output)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output.exists())
+            self.assertFalse(output.with_suffix(".lrc").exists())
+
+    def test_fallback_intro_outro_use_positive_unique_indexes(self):
+        from scripts.gate_checks import check_timeline
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wav, lyrics, output = root / "song.wav", root / "lyrics.txt", root / "timeline.json"
+            write_wav(wav, 6.0, silence=True)
+            lyrics.write_text("用户歌词", encoding="utf-8")
+            result = self.run_script("timeline_fallback.py", wav, lyrics, output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            timeline = json.loads(output.read_text(encoding="utf-8"))
+            indexes = [line['index'] for line in timeline['lines']]
+            self.assertTrue(all(index > 0 for index in indexes))
+            self.assertEqual(len(indexes), len(set(indexes)))
+            checks = check_timeline(timeline, "用户歌词", 6.0)
+            self.assertTrue(next(check['pass'] for check in checks
+                                 if check['item'] == '歌词索引唯一且时间正向有限'))
 
     def test_gate6_rejects_contiguous_windows_shifted_off_song(self):
         timeline = {"duration_sec": 10.0, "lines": [
@@ -723,7 +779,7 @@ class PipelineTests(unittest.TestCase):
             result = self.run_script("gate_checks.py", "gate5", project)
             self.assertEqual(result.returncode, 1)
             report = json.loads(result.stdout)
-            self.assertFalse(report["checks"][0]["pass"])
+            self.assertTrue(any(not item["pass"] for item in report["checks"]))
 
     def test_prompt_build_rejects_timing_only_storyboard(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:

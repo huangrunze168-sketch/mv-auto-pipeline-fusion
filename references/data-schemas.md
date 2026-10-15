@@ -113,6 +113,21 @@ V1.4.1 的 `story_plan.shots[]` 还必须提供 `story_intent / obstacle / keyfr
 
 `visual_assets.json` 中的 `status=approved` 仅表示带证据的静态结构登记；V1.4.1 同时记录 `review_scope=static_structure / agent_inspected / user_accepted / dynamic_verified / quality_claim`，避免把登记误读为用户接受或动态艺术验收。
 
+### V1.5 AI 剧组字段
+
+`development.json` 必须包含 `crew_bible.schema_version=2`，并分别提供 `screenwriting / directing / cinematography / lighting / production_design / character_design / blocking / editing` 八部门交接物。`handoffs[]` 为部门之间的 `from / to / deliverable / acceptance` 交接图。导演部门的 `style_application_order` 固定为 `after_film_grammar`。
+
+可选 `grammar_reference` 绑定匿名电影语法画像：`profile_path / profile_sha256 / profile_id / mode / rationale / use_scope`。`profile_path` 必须是项目内相对路径；`mode=advisory` 只报告，`mode=enforce_envelope` 会阻断样本不足或镜长越界。画像指纹变化后必须重新批准，不能静默换库。
+
+V1.6.1：所有正式编译入口均核验已声明画像；无画像时省略 `grammar_reference`，不填空对象。资产设计指纹包含 `crew_bible`，修改全片灯光等部门策略需重新复核依赖资产。
+
+每个 `development.scenes[]` 增加：
+
+- `art_direction`：`foreground / midground / background / scenic_action / hero_prop / negative_space / material_contrast / set_history / color_script / scale_cue / background_activity`
+- `lighting_plan`：`primary_source / secondary_source / shadow_zones / exposure_priority / color_temperature_relation / cue_changes / key_direction / key_quality / fill_strategy / practicals / continuity_anchor`
+
+每个 `story_plan.shots[]` 增加 `crew`，其中摄影必须记录 `viewpoint_id / shot_size / camera_position / camera_height / camera_side / angle_deg / lens_behavior / camera_movement / movement_motivation / axis_id`；调度记录起止点、入出画方向、视线与屏幕方向；剪辑记录镜头职责、前后关系、节奏、音乐 cue、视觉变化、地理状态和 hook。完整定义见 `references/crew-production-pipeline.md`。
+
 ## 4. prompts/SHxxx.json —— 六段式提示词（关 5 校验对象）
 
 ```json

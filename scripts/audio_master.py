@@ -2,6 +2,10 @@
 import json
 import subprocess
 from pathlib import Path
+try:
+    from .pipeline_contracts import digest, atomic_batch
+except ImportError:
+    from pipeline_contracts import digest, atomic_batch
 
 
 def probe_audio(path: Path) -> dict:
@@ -29,6 +33,18 @@ def resolve_master(project: Path, timeline: dict) -> Path:
         raise ValueError(
             "source_audio 是低采样率分析音频；请在 timeline.master_audio 指定用户原始母带。"
             "若用户原文件本身为低采样率，也必须显式声明 master_audio。")
+    actual = digest(path)
+    declared_hash = timeline.get("master_audio_sha256")
+    if declared_hash and declared_hash != actual:
+        raise ValueError("原始母带SHA-256与输入声明不一致")
+    lock_path = project / "state/master_audio_lock.json"
+    if lock_path.is_file():
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        if lock.get("sha256") != actual:
+            raise ValueError("原始母带已改变，需显式重新登记并重审所有音频依赖")
+    else:
+        atomic_batch({lock_path: json.dumps({"sha256": actual, "path": str(path.resolve()),
+                                           "origin": "declared_input" if declared_hash else "first_observed_input"})})
     return path
 
 

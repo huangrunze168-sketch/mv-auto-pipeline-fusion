@@ -6,6 +6,10 @@ import hashlib
 import json
 import sys
 from pathlib import Path
+try:
+    from .crew_execution import execution_lines, scene_execution, cut_rehearsal
+except ImportError:
+    from crew_execution import execution_lines, scene_execution, cut_rehearsal
 
 try:
     from .visual_development import require as require_development, AXES, shot_fingerprint
@@ -74,10 +78,25 @@ def sha256_file(path: Path) -> str:
 
 
 def main():
+    try:
+        from .pipeline_contracts import atomic_batch
+    except ImportError:
+        from pipeline_contracts import atomic_batch
+    updates = {}
+    expected = {}
+    def stage(path, text):
+        if path not in expected:
+            expected[path] = sha256_file(path) if path.is_file() else None
+        updates[path] = text
     ap = argparse.ArgumentParser()
     ap.add_argument("project_dir")
     a = ap.parse_args()
-    project = Path(a.project_dir)
+    project = Path(a.project_dir).resolve()
+    for name in ('timeline', 'style', 'storyboard', 'development', 'story_plan', 'visual_edit_plan', 'music_structure'):
+        path = project / 'state' / f'{name}.json'
+        expected[path] = sha256_file(path) if path.is_file() else None
+    director_index = Path(__file__).resolve().parents[1]/'vendor/zy-cinematic-realism/references/directors/index.md'
+    expected[director_index] = sha256_file(director_index)
     timeline = load(project / "state" / "timeline.json")
     style = load(project / "state" / "style.json")
     storyboard_path = project / "state" / "storyboard.json"
@@ -87,7 +106,21 @@ def main():
             "缺少 ZY Cinematic Realism 故事分镜：请先生成 state/story_plan.json，"
             "再重新运行 storyboard_build.py"
         )
+    try:
+        from .crew_rehearsal import require_before_prompts
+    except ImportError:
+        from crew_rehearsal import require_before_prompts
+    require_before_prompts(project)
     development = require_development(project, storyboard, style)
+    if style.get('director_ref', {}).get('name'):
+        try:
+            from .visual_development import VENDOR
+        except ImportError:
+            from visual_development import VENDOR
+        expected[(VENDOR/development['director']['source_file']).resolve()] = development['director']['source_sha256']
+    if development.get('grammar_reference'):
+        binding = development['grammar_reference']
+        expected[(project/binding['profile_path']).resolve()] = binding['profile_sha256']
     if style.get("director_ref", {}).get("name"):
         style["director_ref"]["active_axes"] = development["director"]["active_axes"]
         style["director_ref"]["active_traits"] = development["director"].get("active_traits", [])
@@ -106,14 +139,18 @@ def main():
     for folder in ("scenes", "keyframes", "motion"):
         (prompts_dir / folder).mkdir(exist_ok=True)
     for master in development["scenes"]:
-        (prompts_dir / "scenes" / f"{master['id']}.json").write_text(json.dumps({
-            "scene_id": master["id"], "format": "model-neutral", "prompt": master["master_prompt"],
+        stage(prompts_dir / "scenes" / f"{master['id']}.json", json.dumps({
+            "scene_id": master["id"], "format": "model-neutral", "prompt": scene_execution(master),
             "topology": master["topology"], "light_map": master["light_map"],
             "material_rules": master["material_rules"],
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+            "art_direction": master.get("art_direction", {}),
+            "lighting_plan": master.get("lighting_plan", {}),
+            "crew_handoff": "场景美术和灯光先锁定空间、材质与来源光，导演风格只能在此基础上取舍",
+        }, ensure_ascii=False, indent=2))
 
     protagonist = next(iter(sorted((project / "input").glob("protagonist.*"))), None)
     character_fp = sha256_file(protagonist) if protagonist else "none"
+    if protagonist: expected[protagonist] = character_fp
     line_map = {line["index"]: line for line in timeline.get("lines", [])}
     keywords = "，".join(style.get("visual_keywords", []))
 
@@ -187,13 +224,18 @@ def main():
             "scene": scene,
             "subject": subject,
             "performance": performance,
-            "camera": f"{shot['shot_type']}，{shot['camera_witness']}，{shot.get('camera', '固定镜头')}，真实透视按空间关系自然变化",
+            "camera": f"{shot['shot_type']}；摄影执行：" + json.dumps(shot['crew']['cinematography'], ensure_ascii=False),
             "audio_policy": audio_policy,
             "negative_prompt": negative,
             "direction": {
+                "sequence_direction": shot.get('sequence_direction'),
                 "method": compile_director_method(style, shot),
+                "crew_execution": execution_lines(shot.get('crew', {})),
+                "crew": shot.get("crew", {}),
                 "edit_trigger": shot["edit_trigger"],
                 "scene_master": {
+                    "current_action": shot["current_action"],
+                    "keyframe_moment": keyframe_moment(shot),
                     "story_intent": shot["story_intent"],
                     "obstacle": shot["obstacle"],
                     "audience_information": shot["audience_information"],
@@ -209,25 +251,43 @@ def main():
             },
         }
         out = prompts_dir / f"{shot['id']}.json"
-        out.write_text(json.dumps(prompt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        (prompts_dir / "keyframes" / out.name).write_text(json.dumps({
+        stage(out, json.dumps(prompt, ensure_ascii=False, indent=2) + "\n")
+        source_hash = "sha256:" + hashlib.sha256(updates[out].encode("utf-8")).hexdigest()
+        stage(prompts_dir / "keyframes" / out.name, json.dumps({
             "shot_id": shot["id"], "scene_id": shot["scene_id"], "format": "model-neutral",
             "scene": scene, "subject": subject, "current_moment": keyframe_moment(shot),
+            "continuity": {"before": shot["state_before"], "after": shot["state_after"]},
+            "prop_state": shot["props"],
+            "reference_exclusions": shot.get("reference_exclusions", []),
             "camera": prompt["camera"], "visual_rules": prompt["visual_rules"],
             "direction": prompt["direction"], "aspect_ratio": style.get("aspect_ratio"),
+            "crew": shot.get("crew", {}),
             "shooting_station": shot["shooting_station"],
             "frame_boundary": shot["frame_boundary"],
             "visual_acceptance": shot["visual_acceptance"],
-            "source_prompt_sha256": sha256_file(out),
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
-        (prompts_dir / "motion" / out.name).write_text(json.dumps({
+            "source_prompt_sha256": source_hash,
+        }, ensure_ascii=False, indent=2))
+        stage(prompts_dir / "motion" / out.name, json.dumps({
             "shot_id": shot["id"], "format": "model-neutral", "subject_lock": subject,
             "motion_design": shot["motion_design"], "audio_policy": audio_policy,
             "window": window, "cut_reason": shot["cut_reason"],
-            "source_prompt_sha256": sha256_file(out),
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+            "crew": shot.get("crew", {}),
+            "crew_execution": execution_lines(shot.get('crew', {})),
+            "director_method": prompt['direction']['method'],
+            "sequence_direction": shot.get('sequence_direction'),
+            "scene_master": prompt['direction']['scene_master'],
+            "continuity": prompt['continuity'],
+            "visual_rules": prompt['visual_rules'],
+            "source_prompt_sha256": source_hash,
+        }, ensure_ascii=False, indent=2))
         built.append(out.name)
 
+    stage(prompts_dir / 'cut_rehearsal.json', json.dumps({
+        'schema_version': 1, 'scope': 'design_rehearsal_not_approval',
+        'storyboard_sha256': sha256_file(storyboard_path),
+        'cuts': cut_rehearsal(storyboard['shots']),
+        'dynamic_review_required': True}, ensure_ascii=False, indent=2)+'\n')
+    atomic_batch(updates, expected=expected)
     print(json.dumps({"prompts": len(built), "character_fingerprint": character_fp,
                       "files": built}, ensure_ascii=False))
 

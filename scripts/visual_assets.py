@@ -29,6 +29,7 @@ def scoped_snapshot(project: Path, scene_id: str, shot_id: str | None) -> str:
     relevant_beats = {scene.get("source_beat") if scene else None, shot.get("source_beat") if shot else None}
     value = {"scene": scene, "shot": shot, "treatment": development.get("treatment"),
              "director": development.get("director"), "references": development.get("references"),
+             "crew_bible": development.get("crew_bible"),
              "visual_rules": development.get("visual_rules"),
              "ledger": [e for e in development.get("source_ledger", []) if e["id"] in relevant_beats],
              "continuity": storyboard.get("continuity_bible")}
@@ -80,6 +81,20 @@ def register(project: Path, aid: str, kind: str, scene_id: str, path: Path,
              evidence: str, parent_id: str | None = None) -> dict:
     if not evidence.strip() or not path.is_file():
         raise ValueError("登记批准资产必须提供实际审查证据与存在的文件")
+    import subprocess
+    if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+        raise ValueError("静态资产不接受视频容器")
+    measured = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                               "-count_frames", "-show_entries",
+                               "stream=width,height,codec_name,nb_read_frames",
+                               "-of", "json", str(path)], capture_output=True, text=True, check=True)
+    streams = json.loads(measured.stdout).get("streams", [])
+    if (not streams or streams[0].get("codec_name") not in {"png", "mjpeg", "webp", "gif", "bmp"}
+            or streams[0].get("width", 0) <= 0 or streams[0].get("height", 0) <= 0
+            or str(streams[0].get("nb_read_frames")) != "1"):
+        raise ValueError("资产须为可解码的单帧静态图片，并有有效尺寸")
+    subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-frames:v", "1", "-f", "null", "-"],
+                   capture_output=True, check=True)
     development = load(project / "state" / "development.json")
     if scene_id not in {s["id"] for s in development["scenes"]}:
         raise ValueError("场景不存在")
@@ -87,7 +102,8 @@ def register(project: Path, aid: str, kind: str, scene_id: str, path: Path,
     registry = load(registry_path) if registry_path.is_file() else {"assets": {}}
     record = {"kind": kind, "scene_id": scene_id, "path": str(path.resolve()),
               "sha256": fingerprint(path), "status": "approved", "review_evidence": evidence,
-              "review_scope": "static_structure", "agent_inspected": True,
+              "review_scope": "declared_static_structure", "agent_inspected": False,
+              "inspection_source": "caller_declared_evidence", "media_probe": streams[0],
               "user_accepted": False, "dynamic_verified": False,
               "quality_claim": "not_certified_by_registry",
               "dependencies": dependency_snapshot(project),

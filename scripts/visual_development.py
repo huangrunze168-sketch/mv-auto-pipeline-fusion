@@ -5,6 +5,13 @@ import json
 import re
 from pathlib import Path
 
+try:
+    from .crew_pipeline import validate_crew_pipeline
+    from .film_grammar_corpus import audit_binding
+except ImportError:
+    from crew_pipeline import validate_crew_pipeline
+    from film_grammar_corpus import audit_binding
+
 AXES = ("light_contrast", "color_exposure", "lens_camera", "composition_space")
 VENDOR = Path(__file__).resolve().parents[1] / "vendor" / "zy-cinematic-realism"
 
@@ -35,7 +42,8 @@ def indexed(items: list, label: str, errors: list) -> dict:
     return result
 
 
-def validate(development: dict, storyboard: dict, style: dict) -> list[str]:
+def validate(development: dict, storyboard: dict, style: dict,
+             project: Path | None = None) -> list[str]:
     errors = []
     treatment = development.get("treatment", {})
     for key in ("concept", "form", "emotional_arc", "visual_motif", "climax", "performance_rationale"):
@@ -95,6 +103,16 @@ def validate(development: dict, storyboard: dict, style: dict) -> list[str]:
             errors.append("指定导演必须引用实际导演文件，不能只填姓名")
         elif director.get("source_sha256") != fingerprint(path):
             errors.append("导演来源指纹缺失或已过期")
+        try:
+            from .director_catalog import resolve_director
+        except ImportError:
+            from director_catalog import resolve_director
+        try:
+            routed = resolve_director(requested, director_root)
+            if path.name != routed['file']:
+                errors.append('导演名称与ZY索引实际方法文件不匹配，禁止借用其他导演文件')
+        except (OSError, ValueError) as exc:
+            errors.append(f'导演索引路由失败: {exc}')
         if director.get("strength") not in {"轻微", "明确", "强烈"}:
             errors.append("导演强度无效")
         elif director["strength"] != style.get("director_ref", {}).get("intensity", "明确"):
@@ -140,15 +158,34 @@ def validate(development: dict, storyboard: dict, style: dict) -> list[str]:
                 errors.append(f"{sid} 视频动作设计缺少 {key}")
     if not storyboard.get("shots"):
         errors.append("没有视觉分镜，不能编译生成制作包")
+    else:
+        errors.extend(validate_crew_pipeline(development, storyboard))
+    if "grammar_reference" in development:
+        if not isinstance(development["grammar_reference"], dict) or not development["grammar_reference"]:
+            errors.append("电影画像绑定必须是非空对象；不使用画像时请省略 grammar_reference")
+        elif project is None:
+            errors.append("声明电影画像时必须提供项目目录，禁止跳过画像检查")
+        else:
+            try:
+                report = audit_binding(development, storyboard, project)
+                if report:
+                    errors.extend("电影画像: " + error for error in report["errors"])
+            except (OSError, ValueError, TypeError, AttributeError) as exc:
+                errors.append(f"电影画像校验失败: {exc}")
     return errors
 
 
 def require(project: Path, storyboard: dict, style: dict) -> dict:
+    try:
+        from .pipeline_contracts import require_no_transaction
+    except ImportError:
+        from pipeline_contracts import require_no_transaction
+    require_no_transaction(project)
     path = project / "state" / "development.json"
     if not path.is_file():
         raise ValueError("缺少 state/development.json，请先完成 ZY 视觉开发")
     result = load(path)
-    errors = validate(result, storyboard, style)
+    errors = validate(result, storyboard, style, project)
     for name, key in (("timeline.json", "timeline_fingerprint"),
                       ("story_plan.json", "story_plan_fingerprint"),
                       ("visual_edit_plan.json", "visual_edit_fingerprint")):
@@ -170,7 +207,7 @@ if __name__ == "__main__":
     project = Path(args.project_dir)
     errors = validate(load(project / "state" / "development.json"),
                       load(project / "state" / "storyboard.json"),
-                      load(project / "state" / "style.json"))
+                      load(project / "state" / "style.json"), project)
     report = {"status": "blocked" if errors else "structural_pass", "errors": errors,
               "visual_quality": "requires_observed_review"}
     (project / "gates").mkdir(exist_ok=True)

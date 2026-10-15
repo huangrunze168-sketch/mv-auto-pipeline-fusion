@@ -128,6 +128,10 @@ def apply_story_plan(project: Path, shots: list) -> tuple[str, dict, str | None]
             errors.append(f"{shot['id']} 缺少来源节拍或前后连续性状态")
         if "lyric_lines" in item and item["lyric_lines"] != shot["lyric_lines"]:
             errors.append(f"{shot['id']} 不得改写歌词引用")
+        exclusions = item.get('reference_exclusions', [])
+        if (not isinstance(exclusions, list) or any(
+                not isinstance(value, str) or not value.strip() for value in exclusions)):
+            errors.append(f"{shot['id']} reference_exclusions须为非空字符串列表，不能传字符串冒充列表")
         coverage = item.get("coverage_plan", [])
         if not isinstance(coverage, list):
             errors.append(f"{shot['id']} coverage_plan 必须是列表")
@@ -148,6 +152,14 @@ def apply_story_plan(project: Path, shots: list) -> tuple[str, dict, str | None]
                     errors.append(
                         f"{shot['id']}/{part.get('id')} 已选 coverage 必须先落为独立定时镜头"
                     )
+                elif part.get("selection_status") == "selected":
+                    target = mapping.get(part["materialized_shot_id"])
+                    timed = next((s for s in shots if s['id'] == part['materialized_shot_id']), None)
+                    if (not target or target.get("scene_id") != item.get("scene_id")
+                            or target.get("coverage_source_id") != part.get("id")
+                            or not timed or part.get('window') != timed.get('window')
+                            or part.get('keyframe_moment') != target.get('keyframe_moment')):
+                        errors.append(f"{shot['id']} coverage未引用同场景正式镜头及coverage_source_id")
     if errors:
         raise ValueError("\n".join(errors))
     for shot in shots:
@@ -155,11 +167,13 @@ def apply_story_plan(project: Path, shots: list) -> tuple[str, dict, str | None]
         for key in REQUIRED_STORY_FIELDS | {
             "purpose", "knowledge_state", "prop_state", "source_beat",
             "state_before", "state_after", "active_rule_ids", "director_decisions", "motion_design", "risk_tags",
-            "decision_authority", "design_revision", "coverage_plan",
+            "decision_authority", "design_revision", "coverage_plan", "crew", "coverage_source_id",
+            "reference_exclusions", "sequence_direction",
         }:
             if key in item:
                 shot[key] = item[key]
         shot.update(visual_concept=item["story_beat"], story_status="ready", status="pending")
+        shot['camera'] = json.dumps((shot.get('crew') or {}).get('cinematography', {}), ensure_ascii=False)
     return "zy_story_visual_development", plan.get("continuity_bible", {}), sha256_file(path)
 
 
@@ -180,6 +194,12 @@ def build(project: Path, fps: float = 24) -> dict:
         edit = json.loads(edit_path.read_text(encoding="utf-8"))
         shots = build_visual_shots(timeline, music, edit, fps)
         mode, continuity, story_fp = apply_story_plan(project, shots)
+        development_path = project / 'state/development.json'
+        if development_path.is_file():
+            development = json.loads(development_path.read_text(encoding='utf-8'))
+            kinds = {s['id']: s.get('kind', 'unknown') for s in development.get('scenes', [])}
+            for shot in shots:
+                shot['scene_kind'] = kinds.get(shot['scene_id'], 'unknown')
         result = {"schema_version": 2, "story_mode": mode, "shots": shots, "fps": fps,
                   "frame_snapped": True, "timing_mode": "music_referenced_visual_edit",
                   "music_anchors": music_anchors(timeline, music, fps),

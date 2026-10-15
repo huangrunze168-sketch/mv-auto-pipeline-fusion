@@ -8,14 +8,14 @@
 from __future__ import annotations
 
 from typing import Any
+try:
+    from .pipeline_contracts import REFERENCE_INTENTS, timeline_errors
+except ImportError:
+    from pipeline_contracts import REFERENCE_INTENTS, timeline_errors
 
 
 ALLOWED_MODALITIES = {"image", "video", "audio"}
-ALLOWED_INTENTS = {
-    "character_identity", "wardrobe", "location", "composition",
-    "blocking_start_state", "camera_motion", "action_timing",
-    "performance_timing", "voice", "sound", "material", "lighting", "style",
-}
+ALLOWED_INTENTS = REFERENCE_INTENTS
 CHARACTER_INTENTS = ["character_identity", "wardrobe"]
 CHARACTER_EXCLUSIONS = ["background", "composition", "lighting", "pose"]
 KEYFRAME_INTENTS = ["composition", "location", "blocking_start_state"]
@@ -25,7 +25,7 @@ KEYFRAME_EXCLUSIONS = ["character_identity", "wardrobe", "performance_timing"]
 def _source_present(binding: dict[str, Any]) -> bool:
     source = binding.get("source") or {}
     return any(str(source.get(key, "")).strip()
-               for key in ("local_path", "sha256", "chapter_id", "asset_id", "url"))
+               for key in ("local_path", "asset_id", "url"))
 
 
 def build_omni_reference_blueprint(
@@ -71,7 +71,7 @@ def build_omni_reference_blueprint(
         "condition_only": True,
         "generate_audio": False,
         "final_master_replaced_locally": True,
-        "binding_status": "awaiting_adapter_upload",
+        "binding_status": "available" if chapter.get("audio_asset") else "planned",
     })
 
     timeline = []
@@ -97,6 +97,8 @@ def build_omni_reference_blueprint(
         "backend": None,
         "adapter_status": "not_in_scope",
         "chapter_id": chapter["id"],
+        "duration_sec": chapter["window"]["end"] - chapter["window"]["start"],
+        "time_basis": "chapter_relative",
         "subject_definitions": subject_definitions,
         "reference_bindings": bindings,
         "retention_analysis": [
@@ -144,7 +146,8 @@ def validate_omni_reference_blueprint(blueprint: dict[str, Any]) -> list[str]:
             handles[handle] = binding
         if modality not in ALLOWED_MODALITIES:
             errors.append(f"{handle or '未命名素材'} modality 无效")
-        if not _source_present(binding):
+        if not _source_present(binding) and not (binding.get("binding_status") == "planned"
+                                               and modality == "audio"):
             errors.append(f"{handle or '未命名素材'} 缺少本地来源或资产定位")
         if not intents:
             errors.append(f"{handle or '未命名素材'} 未声明参考职责")
@@ -166,6 +169,7 @@ def validate_omni_reference_blueprint(blueprint: dict[str, Any]) -> list[str]:
             errors.append(f"{handle} 未隔离人物图的背景/构图/灯光/姿势")
 
     timeline = blueprint.get("timeline") or []
+    errors.extend(timeline_errors(timeline, blueprint.get("duration_sec"), "shot_id"))
     previous_end: float | None = None
     for index, shot in enumerate(timeline):
         shot_id = shot.get("shot_id", "unknown")
