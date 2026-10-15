@@ -149,8 +149,16 @@ PACING_LOOSER_IF_LESSER = frozenset({"min_shot_size_variety_per_scene"})
 
 # P1: 灯光/舞美禁空泛词与可搭建拓扑；ZY 可机检 crew 增量
 VAGUE_AESTHETIC_SUBSTRINGS = (
+    # 中文空泛审美（不替代人审「好看」；仅拦不可执行措辞）
     "电影感", "唯美", "大片感", "大片", "高级感", "氛围感", "质感拉满",
     "高级光", "氛围光", "电影光", "网感", "高级电影感",
+    "绝美", "超美", "梦幻感", "高级氛围", "氛围拉满", "质感满分",
+    "高级质感", "氛围拉满", "光影大片", "情绪拉满", "好看", "漂亮",
+    "惊艳", "炸裂", "封神", "氛围到位", "质感到位",
+    # English empty aesthetic
+    "cinematic feel", "cinematic vibe", "beautiful", "gorgeous", "stunning",
+    "epic vibe", "moody vibe", "high-end look", "premium look", "aesthetic vibe",
+    "atmosphere only", "vibes only", "film look", "movie look",
 )
 KEY_DIRECTIONS = frozenset({
     "left", "right", "front", "back", "above", "below",
@@ -188,6 +196,15 @@ SCREEN_DIRECTION_REVERSE = {
     "toward_camera": "away_camera",
     "away_camera": "toward_camera",
 }
+BODY_ORIENTATION_NORMALIZE = {
+    "left_to_right": "left_to_right", "right_to_left": "right_to_left",
+    "toward_camera": "toward_camera", "away_camera": "away_camera",
+    "朝右": "left_to_right", "向右": "left_to_right", "面向右": "left_to_right",
+    "朝左": "right_to_left", "向左": "right_to_left", "面向左": "right_to_left",
+    "面向镜头": "toward_camera", "朝向镜头": "toward_camera", "正对镜头": "toward_camera",
+    "背对镜头": "away_camera", "背向镜头": "away_camera",
+}
+CROSS_SCENE_ANGLE_WINDOW_SEC = 8.0
 EYELINE_QUADRANTS = frozenset({
     "left", "right", "up", "down", "center",
     "left_up", "left_down", "right_up", "right_down",
@@ -274,7 +291,15 @@ def _pacing_exception_ok(editing_bible: dict[str, Any], policy: dict[str, Any]) 
         return False
     reason = exception.get("reason")
     evidence = exception.get("evidence")
-    return isinstance(reason, str) and bool(reason.strip()) and isinstance(evidence, str) and bool(evidence.strip())
+    if not (isinstance(reason, str) and isinstance(evidence, str)):
+        return False
+    reason_s, evidence_s = reason.strip(), evidence.strip()
+    # 加严：两端非空、证据足够长、证据不得简单复读理由
+    if len(reason_s) < 4 or len(evidence_s) < 8:
+        return False
+    if evidence_s == reason_s or evidence_s in reason_s:
+        return False
+    return True
 
 
 def _effective_pacing_policy(
@@ -816,6 +841,21 @@ def validate_crew_pipeline(
         music_structure=music_structure, timeline=timeline, fps=fps,
         scenes=development.get("scenes"),
     ))
+    # P3.1：生产路径 revision 必须为 2（禁止旧 revision 跳过 sequence_direction）
+    if project is not None:
+        rev = development.get("creative_workflow_revision")
+        if rev != 2:
+            errors.append(
+                "creative_workflow_revision 必须为 2；"
+                "revision≠2 禁止跳过 sequence_direction（eligible=false）"
+            )
+        try:
+            from .film_grammar_corpus import audit_binding
+        except ImportError:
+            from film_grammar_corpus import audit_binding
+        grammar_report = audit_binding(development, storyboard, Path(project))
+        if grammar_report:
+            errors.extend(f"电影语法画像: {item}" for item in grammar_report.get("errors") or [])
     return errors
 
 
@@ -870,6 +910,30 @@ def _directions_reversed(prev: Any, curr: Any) -> bool:
         return False
     a, b = prev.strip(), curr.strip()
     return SCREEN_DIRECTION_REVERSE.get(a) == b
+
+
+def _normalize_body_orientation(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or text in {"none", "static"}:
+        return None
+    if text in BODY_ORIENTATION_NORMALIZE:
+        return BODY_ORIENTATION_NORMALIZE[text]
+    folded = text.casefold()
+    for key, norm in BODY_ORIENTATION_NORMALIZE.items():
+        if key.casefold() == folded:
+            return norm
+    # 宽松：含「朝左/朝右」等
+    if "朝左" in text or "向左" in text:
+        return "right_to_left"
+    if "朝右" in text or "向右" in text:
+        return "left_to_right"
+    if "背对" in text or "背向" in text:
+        return "away_camera"
+    if "面向镜头" in text or "朝向镜头" in text or "正对镜头" in text:
+        return "toward_camera"
+    return None
 
 
 def _is_static_path(blocking: dict[str, Any]) -> bool:
@@ -980,6 +1044,43 @@ def validate_sequence_language(
         signatures.append(signature)
         if index >= 2 and signatures[index - 2] == signatures[index - 1] == signature:
             errors.append(f"{sid} 与前两镜重复同一机位/景别/高度，禁止连续三个同角度")
+        # 切碎 scene_id 稀释：同 viewpoint/同轴/同侧/近角跨场短窗仍计三连
+        axis_sig = (
+            camera.get("viewpoint_id"),
+            camera.get("axis_id"),
+            camera.get("camera_side"),
+            _angle_bucket(camera.get("angle_deg")),
+        )
+        if index >= 2:
+            prev2 = shots[index - 2]
+            prev1 = shots[index - 1]
+            p2c = ((prev2.get("crew") or {}).get("cinematography") or {})
+            p1c = ((prev1.get("crew") or {}).get("cinematography") or {})
+            sig2 = (
+                p2c.get("viewpoint_id"), p2c.get("axis_id"),
+                p2c.get("camera_side"), _angle_bucket(p2c.get("angle_deg")),
+            )
+            sig1 = (
+                p1c.get("viewpoint_id"), p1c.get("axis_id"),
+                p1c.get("camera_side"), _angle_bucket(p1c.get("angle_deg")),
+            )
+            if axis_sig == sig1 == sig2 and None not in axis_sig[:3]:
+                try:
+                    t0 = float((prev2.get("window") or {}).get("start", 0))
+                    t1 = float((shot.get("window") or {}).get("end", 0))
+                    span = t1 - t0
+                except (TypeError, ValueError):
+                    span = 0.0
+                if span <= CROSS_SCENE_ANGLE_WINDOW_SEC + 1e-6:
+                    # 仅当至少跨了一个 scene_id 时单独报（同场已由 signature 覆盖）
+                    scenes_triple = {
+                        prev2.get("scene_id"), prev1.get("scene_id"), scene_id,
+                    }
+                    if len(scenes_triple) > 1:
+                        errors.append(
+                            f"{sid} 跨 scene 短窗({span:.2f}s≤{CROSS_SCENE_ANGLE_WINDOW_SEC:.0f}s)"
+                            f"同 viewpoint/轴/侧/角三连，禁止切碎 scene_id 稀释同角"
+                        )
 
         if index == 0:
             near_angle_run = 1
@@ -1025,8 +1126,23 @@ def validate_sequence_language(
         angle_delta = _circular_angle_delta(camera.get("angle_deg"), pcamera.get("angle_deg"))
         if angle_delta is None:
             angle_delta = 999.0
+        try:
+            cross_span = (
+                float((shot.get("window") or {}).get("end", 0))
+                - float((previous.get("window") or {}).get("start", 0))
+            )
+        except (TypeError, ValueError):
+            cross_span = 999.0
+        cross_scene_near_axis = (
+            (not same_scene)
+            and pcamera.get("viewpoint_id") not in {None, ""}
+            and pcamera.get("viewpoint_id") == camera.get("viewpoint_id")
+            and pcamera.get("axis_id") not in {None, ""}
+            and pcamera.get("axis_id") == camera.get("axis_id")
+            and cross_span <= CROSS_SCENE_ANGLE_WINDOW_SEC + 1e-6
+        )
         near_same_angle = (
-            same_scene_axis
+            (same_scene_axis or cross_scene_near_axis)
             and pcamera.get("camera_side") in {"left", "right", "center"}
             and camera.get("camera_side") == pcamera.get("camera_side")
             and angle_delta < NEAR_ANGLE_DEG
@@ -1101,6 +1217,15 @@ def validate_sequence_language(
                         f"{sid} eyeline_vector 象限相对上一镜无理由反向"
                         f"({prev_eye}→{curr_eye})；若有意反向须填 eyeline_reverse_evidence"
                     )
+            # P3.3：身体朝向冲突须证据
+            prev_body = _normalize_body_orientation(pblocking.get("body_orientation"))
+            curr_body = _normalize_body_orientation(blocking.get("body_orientation"))
+            if (prev_body and curr_body and _directions_reversed(prev_body, curr_body)
+                    and not str(blocking.get("body_orientation_evidence") or "").strip()):
+                errors.append(
+                    f"{sid} body_orientation 相对上一镜无理由反向"
+                    f"({prev_body}→{curr_body})；若有意反向须填 body_orientation_evidence"
+                )
             # static/口型站桩：须 crossing_rule + 站位承接
             if _is_static_path(blocking) or _is_static_path(pblocking):
                 if not str(blocking.get("crossing_rule") or "").strip():
@@ -1169,10 +1294,16 @@ def build_report(development: dict[str, Any], storyboard: dict[str, Any],
                  project: Path | None = None) -> dict[str, Any]:
     errors = validate_crew_pipeline(development, storyboard, project=project)
     warnings: list[str] = []
-    grammar_report = audit_binding(development, storyboard, project) if project else None
-    if grammar_report:
-        errors.extend(f"电影语法画像: {item}" for item in grammar_report["errors"])
-        warnings.extend(grammar_report["warnings"])
+    grammar_report = None
+    if project:
+        try:
+            from .film_grammar_corpus import audit_binding
+        except ImportError:
+            from film_grammar_corpus import audit_binding
+        grammar_report = audit_binding(development, storyboard, project)
+        # errors 已由 validate_crew_pipeline 并入；此处只收 warnings 与报告字段
+        if grammar_report:
+            warnings.extend(grammar_report.get("warnings") or [])
     shots = storyboard.get("shots") or []
     durations = [_shot_duration(shot) for shot in shots] if shots else []
     camera_rows = [((shot.get("crew") or {}).get("cinematography") or {}) for shot in shots]
@@ -1197,10 +1328,22 @@ def build_report(development: dict[str, Any], storyboard: dict[str, Any],
         ):
             if value not in (None, "") and str(value) not in row[key]:
                 row[key].append(str(value))
+    source_fingerprints = None
+    if project is not None:
+        try:
+            from .pipeline_contracts import digest as _digest
+        except ImportError:
+            from pipeline_contracts import digest as _digest
+        root = Path(project)
+        source_fingerprints = {
+            "development": _digest(root / "state/development.json") if (root / "state/development.json").is_file() else None,
+            "storyboard": _digest(root / "state/storyboard.json") if (root / "state/storyboard.json").is_file() else None,
+        }
     return {
         "status": "blocked" if errors else "structural_pass",
         "errors": errors,
         "warnings": warnings,
+        "source_fingerprints": source_fingerprints,
         "metrics": {
             "shot_count": len(shots),
             "average_shot_sec": round(sum(durations) / len(durations), 3) if durations else None,

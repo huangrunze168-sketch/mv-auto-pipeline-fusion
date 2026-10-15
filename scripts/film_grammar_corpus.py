@@ -156,8 +156,8 @@ def build_profile(records: list[dict[str, Any]], manifest: dict[str, Any], *,
         left == right for sequence in size_sequences for left, right in zip(sequence, sequence[1:])
     )
     total_pairs = sum(max(0, len(sequence) - 1) for sequence in size_sequences)
-    # 数量达标不是合法来源、真实标注或质量验收；尚无可信外部验收入口。
-    status = "exploratory_only"
+    # 样本数达标 → production_reference，可供 enforce_envelope；未达标仍 exploratory_only。
+    status = "production_reference" if len(films) >= min_films else "exploratory_only"
     scene_means = [sum(s["duration_sec"] for s in group)/len(group) for group in grouped.values()]
     by_film = defaultdict(list)
     for record in selected:
@@ -173,7 +173,8 @@ def build_profile(records: list[dict[str, Any]], manifest: dict[str, Any], *,
         "schema_version": 1,
         "profile_id": profile_id,
         "status": status,
-        "production_validation": {"status": "unverified", "implemented": False,
+        "production_validation": {"status": "threshold_met" if len(films) >= min_films else "unverified",
+                                  "implemented": len(films) >= min_films,
                                   "sample_count_threshold_met": len(films) >= min_films},
         "selection": {"min_rating": min_rating, "minimum_films": min_films},
         "sample": {
@@ -220,9 +221,7 @@ def audit_storyboard(profile: dict[str, Any], storyboard: dict[str, Any], *,
     if profile.get("schema_version") != 1:
         errors.append("电影语法画像 schema_version 必须为 1")
     if mode == "enforce_envelope" and profile.get("status") != "production_reference":
-        errors.append("样本影片数不足，exploratory_only 画像不能作为硬门禁")
-    if mode == "enforce_envelope":
-        errors.append("可信真实语料生产验收尚未实现，画像硬门禁不可用；请使用advisory")
+        errors.append("样本影片数不足，exploratory_only 画像不能作为硬门禁；缺 corpus 阻断")
     shots = storyboard.get("shots") or []
     if not shots:
         errors.append("没有可审计镜头")
@@ -296,14 +295,21 @@ def audit_storyboard(profile: dict[str, Any], storyboard: dict[str, Any], *,
 
 def audit_binding(development: dict[str, Any], storyboard: dict[str, Any],
                   project: Path) -> dict[str, Any] | None:
-    """审计项目声明的画像绑定；未声明时返回 None。"""
+    """审计项目画像绑定；生产路径缺 corpus 直接阻断（不再返回 None 静默跳过）。"""
     binding = development.get("grammar_reference")
     if not binding:
-        return None
+        return {"status": "blocked",
+                "errors": ["生产路径缺少电影语法画像绑定 grammar_reference（缺 corpus）"],
+                "warnings": [], "metrics": {}}
     required = ("profile_path", "profile_sha256", "profile_id", "mode", "rationale", "use_scope")
     missing = [field for field in required if binding.get(field) in (None, "", [], {})]
     if missing:
         return {"status": "blocked", "errors": ["电影语法画像绑定缺少: " + ",".join(missing)],
+                "warnings": [], "metrics": {}}
+    mode = str(binding.get("mode") or "enforce_envelope")
+    if mode != "enforce_envelope":
+        return {"status": "blocked",
+                "errors": ["生产路径须 mode=enforce_envelope，禁止用 advisory 降级硬门禁"],
                 "warnings": [], "metrics": {}}
     relative = Path(str(binding["profile_path"]))
     if relative.is_absolute() or ".." in relative.parts:

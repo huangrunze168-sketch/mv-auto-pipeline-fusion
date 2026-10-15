@@ -113,6 +113,28 @@ class ProductionContracts(unittest.TestCase):
                            for beat in package['beats']],
         }
         self.package = package
+        # 先对齐 sequence（可能改写 storyboard），再写门禁指纹与章节计划指纹
+        from test_visual_workflow import write_sequence_stub
+        from scripts.pipeline_contracts import digest as _digest
+        write_sequence_stub(p, self.sb.get("shots") or [])
+        self.sb = json.loads((p / "state/storyboard.json").read_text(encoding="utf-8"))
+        plan_path = p / "state/chapter_plan.json"
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan["source_storyboard_fingerprint"] = _digest(p / "state/storyboard.json")
+        write(plan_path, plan)
+        (p / "gates").mkdir(parents=True, exist_ok=True)
+        fingerprints = {
+            "development": _digest(p / "state/development.json"),
+            "storyboard": _digest(p / "state/storyboard.json"),
+        }
+        write(p / "gates/crew_pipeline.json", {
+            "status": "structural_pass", "errors": [],
+            "source_fingerprints": fingerprints,
+        })
+        write(p / "gates/crew_rehearsal.json", {
+            "status": "design_ready_for_rehearsal",
+            "artistic_approval": False,
+        })
         self.approve_animatic()
         return package
 

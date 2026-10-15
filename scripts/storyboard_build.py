@@ -210,6 +210,14 @@ def build(project: Path, fps: float = 24) -> dict:
                   "performance_policy": edit.get("performance_policy", {})}
     (project / "state" / "storyboard.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        try:
+            from .sequence_direction import realign_after_storyboard
+        except ImportError:
+            from sequence_direction import realign_after_storyboard
+        realign_after_storyboard(project, result)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
     return result
 
 

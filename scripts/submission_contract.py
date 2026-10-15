@@ -236,6 +236,52 @@ def validate_submission_contract(contract: dict[str, Any], project: Path | None 
         else:
             try:
                 project = Path(project).resolve()
+                # 堵住 external adapter 旁路：须 crew_pipeline / crew_rehearsal 门禁 PASS + 指纹
+                pipeline_gate = project / "gates/crew_pipeline.json"
+                rehearsal_gate = project / "gates/crew_rehearsal.json"
+                if not pipeline_gate.is_file():
+                    errors.append("正式提交须存在 gates/crew_pipeline.json 且 structural_pass")
+                else:
+                    try:
+                        pipe = json.loads(pipeline_gate.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError) as exc:
+                        errors.append(f"crew_pipeline 门禁不可读: {exc}")
+                        pipe = {}
+                    if pipe.get("status") != "structural_pass" or pipe.get("errors"):
+                        errors.append("crew_pipeline 门禁未通过，禁止 external adapter 旁路提交")
+                    fps = pipe.get("source_fingerprints") or {}
+                    try:
+                        from .pipeline_contracts import digest as _digest
+                    except ImportError:
+                        from pipeline_contracts import digest as _digest
+                    for key, rel in (("development", "state/development.json"),
+                                     ("storyboard", "state/storyboard.json")):
+                        path = project / rel
+                        if not path.is_file():
+                            errors.append(f"提交核验缺少 {rel}")
+                            continue
+                        actual = _digest(path)
+                        expected = fps.get(key)
+                        if not expected:
+                            errors.append(
+                                f"crew_pipeline 门禁缺少 source_fingerprints.{key}，须重新跑 crew_pipeline"
+                            )
+                        elif expected != actual:
+                            errors.append(
+                                f"crew_pipeline 指纹过期 ({key})，须重新跑门禁后再提交"
+                            )
+                if not rehearsal_gate.is_file():
+                    errors.append("正式提交须存在 gates/crew_rehearsal.json")
+                else:
+                    try:
+                        reh = json.loads(rehearsal_gate.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError) as exc:
+                        errors.append(f"crew_rehearsal 门禁不可读: {exc}")
+                        reh = {}
+                    if reh.get("status") == "structural_rework_required" or reh.get("status") != "design_ready_for_rehearsal":
+                        errors.append(
+                            "crew_rehearsal 未达 design_ready_for_rehearsal，禁止旁路提交"
+                        )
                 try:
                     from .animatic_review import require as require_animatic
                 except ImportError:

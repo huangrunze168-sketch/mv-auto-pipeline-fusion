@@ -19,7 +19,7 @@ from scripts.visual_revision import check_remix, check_repair
 from scripts.director_review_gate import initial_review, validate_review
 from scripts.crew_pipeline import validate_crew_pipeline, validate_sequence_language
 from scripts.ledger import record
-from scripts.film_grammar_corpus import build_profile, audit_storyboard, audit_binding
+from scripts.film_grammar_corpus import build_profile, audit_storyboard, audit_binding, fingerprint
 
 ROOT = Path(__file__).resolve().parents[1]
 PNG_BYTES = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9WQAAAAASUVORK5CYII=")
@@ -129,6 +129,98 @@ def shot_crew_fixture(index):
     }
 
 
+
+def write_sequence_stub(project, shots=None):
+    """写入可过 sequence_direction.require 的最小导演序列，并回写分镜执行事实。"""
+    project = Path(project).resolve()
+    ref = project / "state" / "sequence_ref.txt"
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_text("fixture-sequence-ref", encoding="utf-8")
+    from scripts.pipeline_contracts import digest
+    sb_path = project / "state/storyboard.json"
+    storyboard = None
+    if sb_path.is_file():
+        import json
+        storyboard = json.loads(sb_path.read_text(encoding="utf-8"))
+        shots = storyboard.get("shots") or shots
+    plan_shots = []
+    for shot in shots or []:
+        window = shot.get("window") or {}
+        start = float(window.get("start", 0) if isinstance(window, dict) else (window[0] if window else 0))
+        end = float(window.get("end", start + 1) if isinstance(window, dict) else (window[1] if window else start + 1))
+        cam = ((shot.get("crew") or {}).get("cinematography") or {})
+        xy = cam.get("position_xy") or [0.0, 0.0]
+        action = shot.get("current_action") or "保持动作"
+        designed = {
+            "id": shot["id"],
+            "window": [start, end],
+            "action": action,
+            "audience_gain": "推进叙事",
+            "camera_reason": "覆盖信息",
+            "cut_reason": "节奏切点",
+            "lighting": "主光稳定",
+            "art": "空间层次保留",
+            "performance": "表演节拍",
+            "camera_xyz": [float(xy[0]), float(xy[1]), 0.0],
+            "actor_start_xy": [0.0, 0.0],
+            "actor_end_xy": [1.0, 0.0],
+            "shot_size": cam.get("shot_size") or "中景",
+            "reference_ids": ["ref1"],
+        }
+        plan_shots.append(designed)
+        shot["current_action"] = action
+        shot["sequence_direction"] = designed
+        if cam.get("position_xy") is None:
+            cam["position_xy"] = [float(xy[0]), float(xy[1])]
+            (shot.setdefault("crew", {})).setdefault("cinematography", {}).update(cam)
+        if not cam.get("shot_size"):
+            (shot.setdefault("crew", {})).setdefault("cinematography", {})["shot_size"] = designed["shot_size"]
+    plan = {
+        "sources": {
+            "ref1": {
+                "path": str(ref.resolve()),
+                "sha256": digest(ref),
+                "scope": "annotation_only",
+                "media_observed": False,
+            }
+        },
+        "shots": plan_shots,
+        "duration_sec": float(plan_shots[-1]["window"][1]) if plan_shots else 0.0,
+        "artistic_approval": False,
+    }
+    write(project / "state/sequence_direction.json", plan)
+    if storyboard is not None:
+        write(sb_path, storyboard)
+    return plan
+
+
+
+def write_grammar_profile(project, *, profile_id="drama-fixture"):
+    """最小 production_reference 画像，供 enforce_envelope 生产路径。"""
+    project = Path(project)
+    path = project / "state/reference_profiles" / f"{profile_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    profile = {
+        "schema_version": 1, "profile_id": profile_id,
+        "status": "production_reference",
+        "scene_mean_duration_sec": {"p10": 0.5, "p90": 8.0},
+        "scene_kind_envelopes": {
+            "narrative": {"p10": 0.5, "p90": 8.0},
+            "performance": {"p10": 0.5, "p90": 8.0},
+        },
+        "shot_size_transitions": {"全景": {"近景": 1}, "近景": {"全景": 1}},
+    }
+    write(path, profile)
+    from scripts.film_grammar_corpus import fingerprint
+    return {
+        "profile_path": f"state/reference_profiles/{profile_id}.json",
+        "profile_sha256": fingerprint(path),
+        "profile_id": profile_id,
+        "mode": "enforce_envelope",
+        "rationale": "测试夹具语料", "use_scope": ["editing"],
+    }
+
+
 def fixture(project):
     timeline = {"duration_sec": 4.0, "source_audio": "input/song.wav",
                 "production_timing_verified": True, "pending_review": [], "lines": [
@@ -164,6 +256,7 @@ def fixture(project):
                                     "end_state": "信入袖内"}, crew=shot_crew_fixture(index))
         stories.append(story)
     development = {
+        "creative_workflow_revision": 2,
         "treatment": {"concept": "等待后出关", "form": "叙事与演唱",
                       "emotional_arc": "犹豫到决定", "visual_motif": "门槛",
                       "climax": "跨门槛", "performance_rationale": "决定时演唱", "status": "proposed"},
@@ -204,6 +297,10 @@ def fixture(project):
                        ("story_plan", {"method": "zy_story_visual_development",
                                        "continuity_bible": bible, "shots": stories})):
         write(project / "state" / f"{name}.json", data)
+    write_sequence_stub(project, stories)
+    binding = write_grammar_profile(project)
+    development["grammar_reference"] = binding
+    write(project / "state/development.json", development)
     return timeline, music, edit, development, style
 
 
@@ -620,8 +717,13 @@ class VisualWorkflowTests(unittest.TestCase):
                 "profile_sha256": fingerprint(profile_path), "profile_id": "high-score-drama",
                 "mode": "advisory", "rationale": "匹配剧情类 MV", "use_scope": ["editing"],
             }}
-            bound = audit_binding(development, {"shots": shots}, project)
-            self.assertEqual(bound["profile"]["profile_id"], "high-score-drama")
+            denied = audit_binding(development, {"shots": shots}, project)
+            self.assertTrue(any("enforce_envelope" in e for e in denied["errors"]), denied)
+            development["grammar_reference"]["mode"] = "enforce_envelope"
+            blocked = audit_binding(development, {"shots": shots}, project)
+            self.assertTrue(any("样本影片数不足" in e for e in blocked["errors"]), blocked)
+            missing = audit_binding({}, {"shots": shots}, project)
+            self.assertTrue(any("缺 corpus" in e for e in missing["errors"]), missing)
             profile_path.write_text("{}", encoding="utf-8")
             changed = audit_binding(development, {"shots": shots}, project)
             self.assertTrue(any("指纹" in error for error in changed["errors"]))
@@ -951,6 +1053,7 @@ class VisualWorkflowTests(unittest.TestCase):
             project = Path(tmp)
             fixture(project)
             sb = build(project)
+            write_sequence_stub(project, sb.get("shots") or [])
             def run(script, *args):
                 completed = subprocess.run([sys.executable, str(ROOT / "scripts" / script),
                                             str(project), *args], capture_output=True,
@@ -1018,6 +1121,111 @@ class VisualWorkflowTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             compile_selection(sb, clips, selected)
 
+
+
+    def test_body_orientation_reverse_requires_evidence(self):
+        editing = crew_bible_fixture()["editing"]
+        music, timeline, fps = self._music_ctx()
+        shots = []
+        for index in range(2):
+            crew = shot_crew_fixture(index)
+            crew["editing"].update(
+                hook=index == 0, music_cue=("downbeat", "accent")[index],
+                geography_status="establish" if index == 0 else "established_from_previous",
+                coverage_role=("establish", "turn")[index],
+                time_relation="continuous",
+                incoming_relation="song_start" if index == 0 else "cut",
+                outgoing_relation="cut" if index == 0 else "chapter_end",
+            )
+            crew["cinematography"].update(angle_deg=0 if index == 0 else 45, position_xy=[0, 1])
+            crew["blocking"]["body_orientation"] = "朝右" if index == 0 else "朝左"
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
+                          "crew": crew})
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertTrue(any("body_orientation_evidence" in e for e in errors), errors)
+        shots[1]["crew"]["blocking"]["body_orientation_evidence"] = "人物转身面向来路"
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertFalse(any("body_orientation_evidence" in e for e in errors), errors)
+
+    def test_cross_scene_same_axis_short_window_counts_as_three_peat(self):
+        editing = crew_bible_fixture()["editing"]
+        editing["pacing_policy"]["min_shot_size_variety_per_scene"] = 1
+        music, timeline, fps = self._music_ctx()
+        shots = []
+        for index in range(3):
+            crew = shot_crew_fixture(0)
+            crew["editing"].update(
+                hook=index == 0, music_cue=("downbeat", "accent", "mid")[index],
+                geography_status="establish",
+                coverage_role=("establish", "develop", "reaction")[index],
+                novelty_axis=("a", "b", "c")[index],
+                visual_change_code=("prop_state", "gaze_shift", "blocking_shift")[index],
+                visual_change=("一", "二", "三")[index],
+                incoming_relation="song_start" if index == 0 else "cut",
+                outgoing_relation="cut" if index < 2 else "chapter_end",
+            )
+            crew["cinematography"].update(
+                viewpoint_id="shared_vp", axis_id="shared_axis",
+                camera_side="left", angle_deg=0, shot_size="中景",
+                position_xy=[0, index],
+            )
+            shots.append({
+                "id": f"SH00{index + 1}", "scene_id": f"scene_{index}",
+                "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
+                "crew": crew,
+            })
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": f"scene_{i}", "kind": "narrative"} for i in range(3)],
+        )
+        self.assertTrue(any("切碎 scene_id" in e or "跨 scene" in e for e in errors), errors)
+
+    def test_expanded_vague_aesthetic_english_and_chinese_blocked(self):
+        errors = []
+        from scripts.crew_pipeline import _reject_vague_aesthetic
+        _reject_vague_aesthetic("t", {"note": "cinematic vibe and 绝美光影"}, errors)
+        self.assertTrue(any("cinematic vibe" in e for e in errors), errors)
+        self.assertTrue(any("绝美" in e for e in errors), errors)
+
+    def test_pacing_exception_rejects_short_or_echo_evidence(self):
+        editing = crew_bible_fixture()["editing"]
+        editing["pacing_policy"]["max_average_shot_sec"] = 15.0
+        editing["pacing_exception"] = {"reason": "慢", "evidence": "慢"}
+        music, timeline, fps = self._music_ctx()
+        shots = []
+        for index in range(2):
+            crew = shot_crew_fixture(index)
+            crew["editing"].update(
+                hook=index == 0, music_cue=("downbeat", "accent")[index],
+                geography_status="establish" if index == 0 else "established_from_previous",
+                coverage_role=("establish", "turn")[index],
+                incoming_relation="song_start" if index == 0 else "cut",
+                outgoing_relation="cut" if index == 0 else "chapter_end",
+            )
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * 6.0, "end": (index + 1) * 6.0},
+                          "crew": crew})
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertTrue(any("超过曲速默认" in e for e in errors), errors)
+
+    def test_revision_not_2_blocks_crew_pipeline_when_project_present(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            _, _, _, development, _ = fixture(project)
+            storyboard = build(project)
+            development["creative_workflow_revision"] = 1
+            errors = validate_crew_pipeline(development, storyboard, project=project)
+            self.assertTrue(any("creative_workflow_revision" in e for e in errors), errors)
 
 if __name__ == "__main__":
     unittest.main()

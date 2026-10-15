@@ -23,12 +23,16 @@ def dependencies(project):
     registry = project / 'state/visual_assets.json'
     sequence = project / 'state/sequence_direction.json'
     development = json.loads((project / 'state/development.json').read_text(encoding='utf-8'))
-    if development.get('creative_workflow_revision') == 2:
-        if not sequence.is_file():
-            raise ValueError('新版工作流缺少导演序列')
-        names.append(str(sequence))
-        design = json.loads(sequence.read_text(encoding='utf-8'))
-        names.extend(source['path'] for source in design['sources'].values())
+    # P3.1：默认强制导演序列；revision≠2 不合格
+    if development.get('creative_workflow_revision') != 2:
+        raise ValueError(
+            'creative_workflow_revision 必须为 2；revision≠2 禁止跳过 sequence_direction'
+        )
+    if not sequence.is_file():
+        raise ValueError('工作流缺少导演序列 sequence_direction')
+    names.append(str(sequence))
+    design = json.loads(sequence.read_text(encoding='utf-8'))
+    names.extend(source['path'] for source in design['sources'].values())
     if registry.exists():
         names.append(str(registry))
         assets = json.loads(registry.read_text(encoding='utf-8'))['assets']
