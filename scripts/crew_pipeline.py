@@ -145,6 +145,33 @@ PACING_LOOSER_IF_GREATER = frozenset({
 })
 PACING_LOOSER_IF_LESSER = frozenset({"min_shot_size_variety_per_scene"})
 
+# P1: 灯光/舞美禁空泛词与可搭建拓扑；ZY 可机检 crew 增量
+VAGUE_AESTHETIC_SUBSTRINGS = (
+    "电影感", "唯美", "大片感", "大片", "高级感", "氛围感", "质感拉满",
+    "高级光", "氛围光", "电影光", "网感", "高级电影感",
+)
+KEY_DIRECTIONS = frozenset({
+    "left", "right", "front", "back", "above", "below",
+    "left_front", "right_front", "left_rear", "right_rear",
+    "camera_left", "camera_right", "camera_front", "camera_back",
+    "左", "右", "前", "后", "上方", "下方",
+    "左前", "右前", "左后", "右后",
+    "左前侧", "右前侧", "左后侧", "右后侧",
+    "画面左侧", "画面右侧", "画面前方", "画面后方",
+    "画面左前", "画面右前", "画面左后", "画面右后",
+    "画面左前侧", "画面右前侧", "画面左后侧", "画面右后侧",
+})
+TOPOLOGY_NODE_KINDS = frozenset({
+    "entrance", "exit", "barrier", "landmark", "mark",
+})
+EXPOSURE_BIASES = frozenset({
+    "protect_highlights", "protect_faces", "broad_midtones",
+    "practical_adaptation", "dense_blacks", "neutral",
+})
+CAMERA_HEIGHT_POLICIES = frozenset({
+    "eye_level", "low", "high", "grounded_threshold", "participant", "sit_eye_level",
+})
+
 
 def _missing(data: dict[str, Any], fields: tuple[str, ...]) -> list[str]:
     return [field for field in fields if data.get(field) in (None, "", [], {})]
@@ -409,6 +436,165 @@ def _validate_scene_coverage_roles(
     return errors
 
 
+
+def _iter_string_values(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_string_values(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_string_values(item)
+
+
+def _vague_aesthetic_hits(text: str) -> list[str]:
+    hits = []
+    for term in VAGUE_AESTHETIC_SUBSTRINGS:
+        if term and term in text:
+            hits.append(term)
+    return hits
+
+
+def _reject_vague_aesthetic(label: str, payload: Any, errors: list[str]) -> None:
+    found: list[str] = []
+    for text in _iter_string_values(payload):
+        for term in _vague_aesthetic_hits(text):
+            if term not in found:
+                found.append(term)
+    if found:
+        errors.append(f"{label} 禁止空泛审美词: {','.join(found)}")
+
+
+def _normalize_key_direction(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _validate_key_direction(label: str, value: Any, errors: list[str]) -> None:
+    direction = _normalize_key_direction(value)
+    if direction is None:
+        errors.append(f"{label} key_direction 必须使用受控方位枚举")
+    elif direction not in KEY_DIRECTIONS:
+        errors.append(
+            f"{label} key_direction={direction!r} 不在受控方位枚举 "
+            f"(如 right_rear/右后侧/画面右后侧)"
+        )
+
+
+def _validate_scene_topology(
+    scene: dict[str, Any],
+    scene_shots: list[dict[str, Any]],
+    errors: list[str],
+) -> None:
+    scene_id = scene.get("id", "unknown")
+    topology = scene.get("topology")
+    axes = scene.get("axes") or {}
+    if isinstance(topology, str):
+        _reject_vague_aesthetic(f"场景 {scene_id} topology", topology, errors)
+        errors.append(
+            f"场景 {scene_id} topology 必须为含 nodes[] 的可搭建结构，"
+            "并与 axes / blocking marks 交叉引用"
+        )
+        return
+    if not isinstance(topology, dict):
+        errors.append(f"场景 {scene_id} topology 必须为对象，含可引用入口/阻挡节点")
+        return
+    _reject_vague_aesthetic(f"场景 {scene_id} topology", topology, errors)
+    nodes = topology.get("nodes")
+    if not isinstance(nodes, list) or len(nodes) < 2:
+        errors.append(f"场景 {scene_id} topology.nodes 至少需要 2 个可引用节点")
+        return
+    node_ids: dict[str, dict[str, Any]] = {}
+    kinds: set[str] = set()
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            errors.append(f"场景 {scene_id} topology.nodes[{index}] 必须为对象")
+            continue
+        node_id = str(node.get("id") or "").strip()
+        kind = str(node.get("kind") or "").strip()
+        if not node_id:
+            errors.append(f"场景 {scene_id} topology.nodes[{index}] 缺少 id")
+            continue
+        if node_id in node_ids:
+            errors.append(f"场景 {scene_id} topology 节点 id 重复: {node_id}")
+            continue
+        if kind not in TOPOLOGY_NODE_KINDS:
+            errors.append(
+                f"场景 {scene_id} 节点 {node_id} kind 必须是 "
+                + "/".join(sorted(TOPOLOGY_NODE_KINDS))
+            )
+            continue
+        axis_id = node.get("axis_id")
+        if axis_id is not None and str(axis_id) and str(axis_id) not in axes:
+            errors.append(f"场景 {scene_id} 节点 {node_id} 引用未知轴线 {axis_id}")
+        node_ids[node_id] = node
+        kinds.add(kind)
+    if not kinds & {"entrance", "exit"}:
+        errors.append(f"场景 {scene_id} topology 至少需要 entrance 或 exit 节点")
+    if "barrier" not in kinds and "landmark" not in kinds and "mark" not in kinds:
+        errors.append(
+            f"场景 {scene_id} topology 至少需要 barrier/landmark/mark 类可站位或阻挡节点"
+        )
+    for shot in scene_shots:
+        sid = shot.get("id", "unknown")
+        blocking = (shot.get("crew") or {}).get("blocking") or {}
+        for field in ("start_mark", "end_mark"):
+            mark = blocking.get(field)
+            if not mark:
+                continue
+            if str(mark) not in node_ids:
+                errors.append(
+                    f"{sid} blocking.{field}={mark!r} 未在场景 {scene_id} "
+                    "topology.nodes 注册"
+                )
+
+
+def _validate_director_crew_constraints(
+    development: dict[str, Any],
+    shots: list[dict[str, Any]],
+    errors: list[str],
+) -> None:
+    """有导演时要求可机检的曝光/机位高度策略；无导演可出片。"""
+    director = development.get("director") or {}
+    if not director.get("name"):
+        return
+    constraints = director.get("crew_constraints")
+    if not isinstance(constraints, dict):
+        errors.append(
+            "指定导演必须提供 crew_constraints"
+            "（exposure_bias / camera_height_policy），不能只加长 prompt"
+        )
+        return
+    missing = _missing(constraints, ("exposure_bias", "camera_height_policy"))
+    if missing:
+        errors.append("导演 crew_constraints 缺少: " + ",".join(missing))
+        return
+    exposure = constraints.get("exposure_bias")
+    height = constraints.get("camera_height_policy")
+    if exposure not in EXPOSURE_BIASES:
+        errors.append(f"导演 exposure_bias={exposure!r} 不在受控词表")
+    if height not in CAMERA_HEIGHT_POLICIES:
+        errors.append(f"导演 camera_height_policy={height!r} 不在受控词表")
+    if exposure not in EXPOSURE_BIASES or height not in CAMERA_HEIGHT_POLICIES:
+        return
+    for shot in shots:
+        sid = shot.get("id", "unknown")
+        crew = shot.get("crew") or {}
+        lighting = crew.get("lighting") or {}
+        camera = crew.get("cinematography") or {}
+        if lighting.get("exposure_bias") != exposure:
+            errors.append(
+                f"{sid} lighting.exposure_bias 必须对齐导演约束 {exposure}"
+            )
+        if camera.get("height_strategy") != height:
+            errors.append(
+                f"{sid} cinematography.height_strategy 必须对齐导演约束 {height}"
+            )
+
+
 def _load_json_if_exists(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
@@ -470,35 +656,44 @@ def validate_crew_pipeline(
             f"{source}->{target}" for source, target in sorted(missing_handoffs)
         ))
 
+    shots = storyboard.get("shots") or []
     for scene in development.get("scenes", []):
         scene_id = scene.get("id", "unknown")
-        missing_art = _missing(scene.get("art_direction") or {}, SCENE_ART_FIELDS)
-        missing_light = _missing(scene.get("lighting_plan") or {}, SCENE_LIGHT_FIELDS)
+        art = scene.get("art_direction") or {}
+        light = scene.get("lighting_plan") or {}
+        missing_art = _missing(art, SCENE_ART_FIELDS)
+        missing_light = _missing(light, SCENE_LIGHT_FIELDS)
         if missing_art:
             errors.append(f"场景 {scene_id} 美术设计缺少: {','.join(missing_art)}")
         if missing_light:
             errors.append(f"场景 {scene_id} 灯光设计缺少: {','.join(missing_light)}")
+        _reject_vague_aesthetic(f"场景 {scene_id} art_direction", art, errors)
+        _reject_vague_aesthetic(f"场景 {scene_id} lighting_plan", light, errors)
+        if light:
+            _validate_key_direction(f"场景 {scene_id} lighting_plan", light.get("key_direction"), errors)
         if scene.get("kind") not in {"narrative", "performance", "montage", "oner"}:
             errors.append(f"场景 {scene_id} 必须声明kind")
         requirements = scene.get("coverage_requirements")
+        scene_shots = [s for s in shots if s.get("scene_id") == scene_id]
         roles = {(s.get("crew", {}).get("editing") or {}).get("coverage_role")
-                 for s in storyboard.get("shots", []) if s.get("scene_id") == scene_id}
+                 for s in scene_shots}
         if not isinstance(requirements, list) or not requirements or not set(requirements) <= roles:
             errors.append(f"场景 {scene_id} coverage_requirements未被正式镜头兑现")
         axes = scene.get("axes") or {}
         if not isinstance(axes, dict) or not axes:
             errors.append(f"场景 {scene_id} 缺少轴线注册表axes")
-            continue
-        seen_geometry = set()
-        for aid, axis in axes.items():
-            try:
-                a, b = axis["start"], axis["end"]
-                geometry = tuple(sorted((tuple(map(number, a)), tuple(map(number, b)))))
-                if len(a) != 2 or len(b) != 2 or a == b or geometry in seen_geometry:
-                    raise ValueError
-                seen_geometry.add(geometry)
-            except (ValueError, KeyError, TypeError):
-                errors.append(f"场景 {scene_id} 轴线{aid}无效或同几何重复命名")
+        else:
+            seen_geometry = set()
+            for aid, axis in axes.items():
+                try:
+                    a, b = axis["start"], axis["end"]
+                    geometry = tuple(sorted((tuple(map(number, a)), tuple(map(number, b)))))
+                    if len(a) != 2 or len(b) != 2 or a == b or geometry in seen_geometry:
+                        raise ValueError
+                    seen_geometry.add(geometry)
+                except (ValueError, KeyError, TypeError):
+                    errors.append(f"场景 {scene_id} 轴线{aid}无效或同几何重复命名")
+        _validate_scene_topology(scene, scene_shots, errors)
 
     shots = storyboard.get("shots") or []
     for shot in shots:
@@ -557,6 +752,10 @@ def validate_crew_pipeline(
                 raise ValueError
         except (TypeError, ValueError):
             errors.append(f"{sid} color_temp_k 必须是 1000..20000K")
+        _reject_vague_aesthetic(f"{sid} lighting", lighting, errors)
+        _validate_key_direction(f"{sid} lighting", lighting.get("key_direction"), errors)
+        production_design = crew.get("production_design") or {}
+        _reject_vague_aesthetic(f"{sid} production_design", production_design, errors)
         blocking = crew.get("blocking") or {}
         for field in ("entry_direction", "exit_direction", "screen_direction"):
             if blocking.get(field) not in DIRECTIONS:
@@ -572,6 +771,7 @@ def validate_crew_pipeline(
         if editing.get("audio_transition") not in AUDIO_TRANSITIONS:
             errors.append(f"{sid} audio_transition 不在受控词表")
 
+    _validate_director_crew_constraints(development, shots, errors)
     errors.extend(validate_sequence_language(
         shots, bible.get("editing") or {},
         music_structure=music_structure, timeline=timeline, fps=fps,

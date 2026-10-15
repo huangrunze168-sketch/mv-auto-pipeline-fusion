@@ -58,6 +58,8 @@
 
 灯光和场景美术不是“唯美、电影感、高级感”等形容词。它们必须说明可搭建的空间层、真实光从哪里来、什么区域不照亮、什么材质接住光，以及场景如何参与叙事。
 
+P1 机检：`lighting_plan` / `art_direction` / 逐镜 lighting·production_design 命中禁词表（电影感/唯美/大片/高级感/氛围感等）即阻断；`key_direction` 必须使用受控方位枚举（如 `right_rear` / `右后侧` / `画面右后侧`）。`topology` 必须为对象：`nodes[]` 至少含入口或出口，以及 barrier/landmark/mark；节点可声明 `axis_id` 引用本场 `axes`；逐镜 `blocking.start_mark` / `end_mark` 必须等于已注册节点 id。
+
 ### `story_plan.shots[].crew`
 
 逐镜记录八部门执行值。摄影和调度至少要能推导以下连续性：
@@ -98,3 +100,5 @@
 5. 检查风格没有破坏人物、服装、地理、动线和音乐时间轴。
 
 `crew_bible.directing.style_application_order` 必须为 `after_film_grammar`。任何“先套导演风格，再补基础镜头”的方案都会被阻断。
+
+指定 `style.director_ref` / `development.director` 时：除导演文件路径与 SHA、激活轴完整性外，必须提供可机检 `crew_constraints.exposure_bias` 与 `camera_height_policy`，并分别对齐到逐镜 `crew.lighting.exposure_bias`、`crew.cinematography.height_strategy`——把 ZY 指纹翻译成 crew 增量，而不是只加长 prompt。无导演可出片；制作桌在基础结构错误时 `director_stylization.eligible_for_routing=false`。

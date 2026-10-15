@@ -168,7 +168,15 @@ def fixture(project):
         "sources": [{"id": "song", "locator": "input/lyrics.txt", "read_scope": "全部两行"}],
         "source_ledger": [{"id": "B1", "kind": "proposal", "source_id": "song",
                            "description": "把等待解释为出关前停顿", "status": "proposed"}],
-        "scenes": [{"id": "gate", "source_beat": "B1", "topology": "门内连接道路",
+        "scenes": [{"id": "gate", "source_beat": "B1",
+                    "topology": {
+                        "description": "门内桌区连接门外道路",
+                        "nodes": [
+                            {"id": "桌内侧", "kind": "mark", "axis_id": "door_axis"},
+                            {"id": "门槛前", "kind": "entrance", "axis_id": "door_axis"},
+                            {"id": "门柱", "kind": "barrier", "axis_id": "door_axis"},
+                        ],
+                    },
                     "kind": "narrative", "coverage_requirements": ["establish", "turn"],
                     "axes": {"door_axis": {"start": [0, 0], "end": [1, 0]}},
                     "light_map": "门外天光", "material_rules": "布与石分别受光", "master_prompt": "可通行的城门",
@@ -597,17 +605,110 @@ class VisualWorkflowTests(unittest.TestCase):
             dev["director"] = {"name": "胡金铨", "strength": "轻微", "active_axes": ["composition_space"],
                                "active_traits": ["门槛组织空间"], "rationale": "人物决定跨门槛",
                                "source_file": "references/directors/king-hu.md",
-                               "source_sha256": fingerprint(VENDOR / "references/directors/king-hu.md")}
+                               "source_sha256": fingerprint(VENDOR / "references/directors/king-hu.md"),
+                               "crew_constraints": {
+                                   "exposure_bias": "protect_highlights",
+                                   "camera_height_policy": "grounded_threshold",
+                               }}
             for shot in sb["shots"]:
                 shot["director_decisions"] = {"composition_space": {
                     "instruction": "门柱、人物与道路层次可读", "reason": "决定是否出关",
                     "observable_check": "观众能读懂门内外关系"}}
+                shot["crew"]["lighting"]["exposure_bias"] = "protect_highlights"
+                shot["crew"]["cinematography"]["height_strategy"] = "grounded_threshold"
             self.assertEqual(validate(dev, sb, style, project), [])
             style["director_ref"].update(active_axes=["composition_space"], active_traits=["门槛"])
             method = compile_director_method(style, sb["shots"][0])
             self.assertEqual(method["axis_status"]["light_contrast"], "preserved")
             dev["director"]["source_sha256"] = "old"
             self.assertTrue(any("指纹" in e for e in validate(dev, sb, style, project)))
+
+    def test_vague_lighting_and_art_words_are_blocked(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            _, _, _, development, _ = fixture(project)
+            storyboard = build(project)
+            development["scenes"][0]["lighting_plan"]["key_direction"] = "电影感冷暖光"
+            development["scenes"][0]["art_direction"]["foreground"] = "唯美大片门柱"
+            storyboard["shots"][0]["crew"]["lighting"]["key_quality"] = "高级感氛围光"
+            errors = validate_crew_pipeline(development, storyboard, project=project)
+            self.assertTrue(any("空泛审美词" in e and "电影感" in e for e in errors), errors)
+            self.assertTrue(any("空泛审美词" in e and ("唯美" in e or "大片" in e) for e in errors), errors)
+            self.assertTrue(any("key_direction" in e and "受控方位" in e for e in errors), errors)
+
+    def test_structured_topology_cross_refs_axes_and_marks(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            _, _, _, development, _ = fixture(project)
+            storyboard = build(project)
+            self.assertEqual(validate_crew_pipeline(development, storyboard, project=project), [])
+            development["scenes"][0]["topology"] = "电影感空间"
+            errors = validate_crew_pipeline(development, storyboard, project=project)
+            self.assertTrue(any("topology 必须为含 nodes" in e for e in errors), errors)
+            self.assertTrue(any("空泛审美词" in e for e in errors), errors)
+            development["scenes"][0]["topology"] = {
+                "nodes": [
+                    {"id": "桌内侧", "kind": "mark", "axis_id": "door_axis"},
+                    {"id": "门槛前", "kind": "entrance", "axis_id": "missing_axis"},
+                ],
+            }
+            errors = validate_crew_pipeline(development, storyboard, project=project)
+            self.assertTrue(any("未知轴线" in e for e in errors), errors)
+            development["scenes"][0]["topology"] = {
+                "nodes": [
+                    {"id": "桌内侧", "kind": "mark", "axis_id": "door_axis"},
+                    {"id": "门槛前", "kind": "entrance", "axis_id": "door_axis"},
+                    {"id": "门柱", "kind": "barrier", "axis_id": "door_axis"},
+                ],
+            }
+            storyboard["shots"][1]["crew"]["blocking"]["end_mark"] = "未注册站位"
+            errors = validate_crew_pipeline(development, storyboard, project=project)
+            self.assertTrue(any("未在场景 gate topology.nodes 注册" in e for e in errors), errors)
+
+    def test_director_requires_grammar_and_crew_constraints(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            _, _, _, development, style = fixture(project)
+            storyboard = build(project)
+            # 无导演仍可出片
+            self.assertEqual(validate(development, storyboard, style, project), [])
+            style["director_ref"] = {"name": "胡金铨", "intensity": "轻微"}
+            development["director"] = {
+                "name": "胡金铨", "strength": "轻微", "active_axes": ["composition_space"],
+                "active_traits": ["门槛"], "rationale": "跨门槛",
+                "source_file": "references/directors/king-hu.md",
+                "source_sha256": fingerprint(VENDOR / "references/directors/king-hu.md"),
+            }
+            for shot in storyboard["shots"]:
+                shot["director_decisions"] = {"composition_space": {
+                    "instruction": "门槛可读", "reason": "决定", "observable_check": "门内外"}}
+            errors = validate(development, storyboard, style, project)
+            self.assertTrue(any("crew_constraints" in e for e in errors), errors)
+            development["director"]["crew_constraints"] = {
+                "exposure_bias": "protect_highlights",
+                "camera_height_policy": "grounded_threshold",
+            }
+            errors = validate(development, storyboard, style, project)
+            self.assertTrue(any("exposure_bias 必须对齐" in e or "height_strategy 必须对齐" in e
+                                for e in errors), errors)
+            for shot in storyboard["shots"]:
+                shot["crew"]["lighting"]["exposure_bias"] = "protect_highlights"
+                shot["crew"]["cinematography"]["height_strategy"] = "grounded_threshold"
+            self.assertEqual(validate(development, storyboard, style, project), [])
+            # 基础语法未过时不能进入风格化路径
+            storyboard["shots"][0]["crew"]["cinematography"]["angle_deg"] = 0
+            storyboard["shots"][1]["crew"]["cinematography"]["angle_deg"] = 0
+            storyboard["shots"][1]["crew"]["cinematography"]["camera_side"] = "left"
+            storyboard["shots"][1]["crew"]["cinematography"]["axis_id"] = "door_axis"
+            storyboard["shots"][1]["crew"]["cinematography"]["shot_size"] = "近景"
+            grammar_errors = validate_crew_pipeline(development, storyboard, project=project)
+            self.assertTrue(
+                any("30" in e or "景别变化不能豁免" in e or "近同角度" in e for e in grammar_errors),
+                grammar_errors,
+            )
+            from scripts.crew_rehearsal import analyze as rehearsal_analyze
+            report = rehearsal_analyze(development, storyboard, project=project)
+            self.assertFalse(report["director_stylization"]["eligible_for_routing"])
 
     def test_changed_scene_master_invalidates_only_dependent_keyframe(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
