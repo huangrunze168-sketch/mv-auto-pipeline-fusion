@@ -91,6 +91,26 @@ P1 机检：`lighting_plan` / `art_direction` / 逐镜 lighting·production_desi
 
 机器门禁只能排除明显错误，不能证明作品好看。正式样片仍需动态观看，检查表演、音乐呼吸、构图吸引力、灯光层次、空间可读性和剪辑情绪。
 
+
+
+## 剧组基础门禁清单（P0–P2，机器可执行）
+
+在进入 ZY 导演风格化（`style_application_order=after_film_grammar`）之前，下列硬约束必须通过：
+
+| 部门/主题 | 机检要点 | 阶段 |
+|---|---|---|
+| 摄影/角度 | 三连签名含角度分桶+轴侧+位置；同轴同侧 30° 不因景别豁免；近同角度连续上限 | P0 |
+| 覆盖 | 叙事/表演场 ≥3 镜：establish、action/develop、reaction/detail、turn/payoff | P0 |
+| 剪辑/节奏 | music_cue 对齐结构；曲速 pacing soft-max + exception | P0 |
+| 灯光/美术 | 禁空泛词；`key_direction` 枚举；topology.nodes ↔ axes/marks | P1 |
+| ZY | 无导演可出片；有导演须 SHA/轴 + `crew_constraints` 对齐镜头 | P1 |
+| 调度/动线 | continuous 比对 screen/eyeline；static 须 crossing_rule + 站位承接 | P2 |
+| 注意力 | `novelty_axis` + `visual_change_code` 枚举与指纹 | P2 |
+| 人物美术 | 交接物禁空泛审美词 | P2 |
+| 审片/成本 | 正式提交走 `submission_contract`（含 animatic）；批量 ledger 须预演+样片批准 | P2 |
+
+仍须人工：成片是否好看、animatic/director 证据与时间码、是否批准导演剪辑定稿、是否付费生成。机器只挡结构造假与明显跳变。
+
 ## 风格化顺序
 
 1. 八部门结构通过。

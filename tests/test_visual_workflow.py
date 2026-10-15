@@ -18,6 +18,7 @@ from scripts.edit_assemble import build as render_edit
 from scripts.visual_revision import check_remix, check_repair
 from scripts.director_review_gate import initial_review, validate_review
 from scripts.crew_pipeline import validate_crew_pipeline, validate_sequence_language
+from scripts.ledger import record
 from scripts.film_grammar_corpus import build_profile, audit_storyboard, audit_binding
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +121,7 @@ def shot_crew_fixture(index):
                     "rhythm_class": "setup" if first else "turn", "music_cue": "song:start" if first else "cue:accent",
                     "novelty_axis": "prop" if first else "viewpoint",
                     "visual_change": "纸角被风掀起" if first else "视线转向门外",
+                    "visual_change_code": "prop_state" if first else "gaze_shift",
                     "geography_status": "establish" if first else "established_from_previous",
                     "hook": first, "coverage_role": "establish" if first else "turn",
                     "transition_type": "hard_cut", "cut_motivation": "动作完成" if first else "音乐重音",
@@ -250,7 +252,8 @@ class VisualWorkflowTests(unittest.TestCase):
         for index in range(3):
             crew = shot_crew_fixture(0 if index == 0 else 1)
             crew["editing"].update(
-                hook=index == 0, visual_change="人物仍坐在桌前", coverage_role="develop",
+                hook=index == 0, visual_change="人物仍坐在桌前", visual_change_code="pose_shift",
+                novelty_axis="performance", coverage_role="develop",
                 geography_status="establish" if index == 0 else "established_from_previous",
                 music_cue=cues[index],
                 incoming_relation="song_start" if index == 0 else "cut",
@@ -270,9 +273,137 @@ class VisualWorkflowTests(unittest.TestCase):
             shots, editing, music_structure=music, timeline=timeline, fps=fps, scenes=scenes,
         )
         self.assertTrue(any("钩子间隔" in error for error in errors), errors)
-        self.assertTrue(any("相同视觉事件持续" in error for error in errors), errors)
+        self.assertTrue(any("相同注意力指纹持续" in error or "相同视觉事件持续" in error for error in errors), errors)
         self.assertTrue(any("reaction/detail" in error for error in errors), errors)
         self.assertTrue(any("turn/payoff" in error for error in errors), errors)
+
+
+    def test_blocking_screen_eyeline_and_static_handoff_are_enforced(self):
+        editing = crew_bible_fixture()["editing"]
+        music, timeline, fps = self._music_ctx()
+        shots = []
+        for index in range(2):
+            crew = shot_crew_fixture(index)
+            crew["editing"].update(
+                hook=index == 0, music_cue=("downbeat", "accent")[index],
+                geography_status="establish" if index == 0 else "established_from_previous",
+                coverage_role=("establish", "turn")[index],
+                time_relation="continuous",
+                incoming_relation="song_start" if index == 0 else "cut",
+                outgoing_relation="cut" if index == 0 else "chapter_end",
+            )
+            crew["cinematography"].update(angle_deg=0 if index == 0 else 40, position_xy=[0, 1])
+            crew["blocking"].update(
+                entry_direction="left_to_right", exit_direction="left_to_right",
+                screen_direction="left_to_right" if index == 0 else "right_to_left",
+                eyeline_vector="右上方门外" if index == 0 else "左下方室内",
+                start_mark="桌内侧", end_mark="门槛前",
+                crossing_rule="不越过门槛轴",
+            )
+            shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                          "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
+                          "crew": crew})
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertTrue(any("screen_direction" in e and "反向" in e for e in errors), errors)
+        self.assertTrue(any("eyeline_vector" in e and "反向" in e for e in errors), errors)
+
+        # static 口型段：缺 crossing_rule / 站位不承接
+        for shot in shots:
+            shot["crew"]["blocking"].update(
+                entry_direction="static", exit_direction="static",
+                screen_direction="left_to_right", eyeline_vector="右上方门外",
+                crossing_rule="", start_mark="A点", end_mark="B点",
+            )
+        shots[0]["crew"]["blocking"]["end_mark"] = "旧站位"
+        shots[1]["crew"]["blocking"]["start_mark"] = "新站位"
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertTrue(any("crossing_rule" in e for e in errors), errors)
+        self.assertTrue(any("站位未承接" in e for e in errors), errors)
+
+        # 正例：同向 + static 承接
+        for shot in shots:
+            shot["crew"]["blocking"].update(
+                entry_direction="static", exit_direction="static",
+                screen_direction="left_to_right", eyeline_vector="右上方门外",
+                crossing_rule="口型段不越轴，脚位锁在桌内侧",
+                start_mark="桌内侧", end_mark="桌内侧",
+            )
+        errors = validate_sequence_language(
+            shots, editing, music_structure=music, timeline=timeline, fps=fps,
+            scenes=[{"id": "gate", "kind": "narrative"}],
+        )
+        self.assertFalse(any("screen_direction" in e and "反向" in e for e in errors), errors)
+        self.assertFalse(any("站位未承接" in e for e in errors), errors)
+        self.assertFalse(any("crossing_rule" in e for e in errors), errors)
+
+    def test_novelty_axis_and_visual_change_code_are_controlled(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            _, _, _, development, _ = fixture(project)
+            storyboard = build(project)
+            storyboard["shots"][0]["crew"]["editing"]["novelty_axis"] = "随便换个说法"
+            storyboard["shots"][0]["crew"]["editing"]["visual_change_code"] = "not_a_code"
+            storyboard["shots"][0]["crew"]["editing"]["visual_change"] = "电影感再来一次"
+            errors = validate_crew_pipeline(development, storyboard, project=project)
+            self.assertTrue(any("novelty_axis" in e for e in errors), errors)
+            self.assertTrue(any("visual_change_code" in e for e in errors), errors)
+            self.assertTrue(any("空泛审美词" in e for e in errors), errors)
+            # 只改措辞、code/novelty 不变 → 三连指纹失败
+            editing = crew_bible_fixture()["editing"]
+            music, timeline, fps = self._music_ctx()
+            shots = []
+            for index in range(3):
+                crew = shot_crew_fixture(0 if index == 0 else 1)
+                crew["editing"].update(
+                    novelty_axis="prop", visual_change_code="prop_state",
+                    visual_change=f"纸角微微动了一下变体{index}",
+                    hook=index == 0, coverage_role=("establish", "develop", "reaction")[index],
+                    geography_status="establish" if index == 0 else "established_from_previous",
+                    music_cue=("downbeat", "accent", "mid")[index],
+                    rhythm_class=f"r{index}",
+                    incoming_relation="song_start" if index == 0 else "cut",
+                    outgoing_relation="cut" if index < 2 else "chapter_end",
+                )
+                crew["cinematography"].update(
+                    angle_deg=index * 40, shot_size=("全景", "近景", "中景")[index],
+                    viewpoint_id=f"v{index}", position_xy=[index * 0.2, 0.5],
+                )
+                shots.append({"id": f"SH00{index + 1}", "scene_id": "gate",
+                              "window": {"start": index * 2.0, "end": (index + 1) * 2.0},
+                              "crew": crew})
+            errors = validate_sequence_language(
+                shots, editing, music_structure=music, timeline=timeline, fps=fps,
+                scenes=[{"id": "gate", "kind": "narrative"}],
+            )
+            self.assertTrue(any("指纹相同" in e or "只改措辞" in e for e in errors), errors)
+
+    def test_character_design_rejects_vague_words(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            _, _, _, development, _ = fixture(project)
+            storyboard = build(project)
+            development["crew_bible"]["character_design"]["silhouette_rule"] = "唯美高级感剪影"
+            storyboard["shots"][0]["crew"]["character_design"]["wardrobe_state"] = "大片氛围感白衣"
+            errors = validate_crew_pipeline(development, storyboard, project=project)
+            self.assertTrue(any("character_design" in e and "空泛审美词" in e for e in errors), errors)
+
+    def test_batch_ledger_requires_review_approvals(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            project = Path(tmp)
+            ledger = project / "ledger.jsonl"
+            event = {
+                "event_id": "E-batch-1", "task_id": "T-batch-1", "action": "reserve",
+                "cash_cny": "1.0", "coins": "0", "duration_sec": "4",
+                "batch": True, "submission_phase": "batch", "project_dir": str(project),
+            }
+            with self.assertRaisesRegex(ValueError, "剪辑预演未批准|project_dir"):
+                record(ledger, event, "10")
 
     def test_same_angle_with_shot_size_cycle_is_blocked(self):
         """同 angle_deg=0、同侧、景别 medium/close/medium 必须失败（P0）。"""
@@ -291,7 +422,7 @@ class VisualWorkflowTests(unittest.TestCase):
             crew["editing"].update(
                 hook=index == 0, coverage_role=("establish", "develop", "reaction")[index],
                 geography_status="establish" if index == 0 else "established_from_previous",
-                music_cue=cues[index], visual_change=f"变化{index}",
+                music_cue=cues[index], visual_change=f"变化{index}", visual_change_code="performance_beat",
                 rhythm_class=f"r{index}",
                 incoming_relation="song_start" if index == 0 else "cut",
                 outgoing_relation="cut" if index < 2 else "chapter_end",
@@ -347,7 +478,7 @@ class VisualWorkflowTests(unittest.TestCase):
             crew["editing"].update(
                 hook=index == 0, music_cue=f"c{index}",
                 coverage_role=roles[index],
-                visual_change=f"v{index}", rhythm_class=f"r{index}",
+                visual_change=f"v{index}", visual_change_code="reveal", rhythm_class=f"r{index}",
                 geography_status="establish" if index == 0 else "established_from_previous",
                 incoming_relation="song_start" if index == 0 else "cut",
                 outgoing_relation="cut" if index < 3 else "chapter_end",
@@ -449,7 +580,7 @@ class VisualWorkflowTests(unittest.TestCase):
         self.assertTrue(any("连续三个同角度" in error for error in errors), errors)
         self.assertTrue(any("人物动线跳变" in error for error in errors), errors)
         self.assertTrue(any("30 度" in error or "景别变化不能豁免" in error for error in errors), errors)
-        self.assertTrue(any("没有新的视觉变化" in error for error in errors), errors)
+        self.assertTrue(any("没有新的视觉变化" in error or "指纹相同" in error or "只改措辞" in error for error in errors), errors)
 
     def test_director_style_cannot_precede_film_grammar(self):
         development = {"crew_bible": crew_bible_fixture(), "scenes": [{

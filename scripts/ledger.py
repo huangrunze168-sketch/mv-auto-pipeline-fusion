@@ -110,6 +110,24 @@ def record(path, entry, cash_limit):
             spent += amount
         if spent + sum(reservations.values()) > limit:
             raise ValueError("支出与在途预占超过现金封顶")
+        # P2：批量付费记账必须先过剪辑预演+样片审片（不伪造批准，只硬依赖）
+        if entry.get("batch") is True or entry.get("submission_phase") == "batch":
+            project_dir = entry.get("project_dir")
+            if not project_dir:
+                raise ValueError("批量台账须提供 project_dir，以便核验审片批准")
+            project = Path(project_dir)
+            try:
+                from .animatic_review import approved as animatic_approved
+                from .director_review_gate import approved as director_approved
+            except ImportError:
+                from animatic_review import approved as animatic_approved
+                from director_review_gate import approved as director_approved
+            ok, errs = animatic_approved(project)
+            if not ok:
+                raise ValueError("批量记账前剪辑预演未批准: " + "; ".join(errs[:3]))
+            dok, derrs = director_approved(project)
+            if not dok:
+                raise ValueError("批量记账前样片导演审片未批准: " + "; ".join(derrs[:3]))
         entry["ts"] = datetime.now().isoformat(timespec="seconds")
         entry['cash_limit_cny'] = str(limit)
         with path.open("a", encoding="utf-8") as handle:

@@ -1,5 +1,13 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## 2026-10-15 · P2 动线/注意力指纹/人物禁词 + 批量审片硬依赖
+
+- G4：同场 continuous 比对 `screen_direction` / `eyeline_vector` 象限反向；static/口型站桩须 `crossing_rule` + `end_mark→start_mark` 站位承接。
+- 注意力：`novelty_axis` 与 `visual_change_code` 受控枚举；三连/停滞按（novelty, code）指纹，禁止只改 `visual_change` 措辞刷新。
+- 人物/美术交接物套用空泛审美禁词表。
+- `ledger.record`：`batch` / `submission_phase=batch` 须 `project_dir` 且 animatic + director_review 已批准（不伪造批准）。
+- 文档：剧组基础门禁清单（P0–P2）写入 `crew-production-pipeline.md`。
+
 ## 2026-10-15 · 预览静帧资产解析：关键帧/场景母版优先于主角图
 
 - `render_preview.resolve_visual_asset`：`visual_asset` → `keyframe-{SHOT_ID}*` → `master-{scene}*` / `{scene}-keyframe*` / `scene_{scene}*` → 时间桶 `scene_*` → `protagonist`；日志输出 `via=`，避免静默全用主角设定图。
