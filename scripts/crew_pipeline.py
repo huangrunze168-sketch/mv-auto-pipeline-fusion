@@ -991,6 +991,11 @@ def validate_sequence_language(
         relation = editing.get("time_relation", "continuous")
         if relation not in {"continuous", "ellipsis", "flashback", "parallel"}:
             errors.append(f"{sid} time_relation无效")
+        if relation != "continuous" and not str(editing.get("time_relation_evidence") or "").strip():
+            errors.append(
+                f"{sid} time_relation={relation} 须提供 time_relation_evidence，"
+                "禁止用省略/闪回标签静默跳过同场动线核验"
+            )
         same_scene = previous.get("scene_id") == scene_id and relation == "continuous"
         bridge = editing.get("axis_bridge") or {}
         reset = False
@@ -1075,10 +1080,10 @@ def validate_sequence_language(
             if (prev_screen not in {None, "", "none", "static"}
                     and curr_screen not in {None, "", "none", "static"}
                     and _directions_reversed(prev_screen, curr_screen)
-                    and not blocking.get("direction_reverse_justified")):
+                    and not str(blocking.get("direction_reverse_evidence") or "").strip()):
                 errors.append(
                     f"{sid} screen_direction 相对上一镜无理由反向"
-                    f"({prev_screen}→{curr_screen})"
+                    f"({prev_screen}→{curr_screen})；若有意反向须填 direction_reverse_evidence"
                 )
             prev_eye = _eyeline_quadrant(pblocking.get("eyeline_vector"))
             curr_eye = _eyeline_quadrant(blocking.get("eyeline_vector"))
@@ -1090,10 +1095,11 @@ def validate_sequence_language(
                     ("left_down", "right_up"), ("right_up", "left_down"),
                     ("toward_camera", "away_camera"), ("away_camera", "toward_camera"),
                 }
-                if (prev_eye, curr_eye) in reverse_pairs and not blocking.get("eyeline_reverse_justified"):
+                if (prev_eye, curr_eye) in reverse_pairs and not str(
+                        blocking.get("eyeline_reverse_evidence") or "").strip():
                     errors.append(
                         f"{sid} eyeline_vector 象限相对上一镜无理由反向"
-                        f"({prev_eye}→{curr_eye})"
+                        f"({prev_eye}→{curr_eye})；若有意反向须填 eyeline_reverse_evidence"
                     )
             # static/口型站桩：须 crossing_rule + 站位承接
             if _is_static_path(blocking) or _is_static_path(pblocking):
