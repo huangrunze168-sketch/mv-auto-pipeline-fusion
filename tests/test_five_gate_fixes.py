@@ -13,10 +13,15 @@ from scripts.storyboard_build import build
 from scripts.visual_development import validate, require, fingerprint
 from scripts.visual_assets import register, asset_errors
 from scripts.crew_pipeline import validate_sequence_language
-from scripts.submission_contract import validate_submission_contract as validate_submission_structure
+from scripts.submission_contract import validate_submission_contract as validate_submission_full
 
+def validate_submission_structure_only(contract):
+    """仅结构；全量校验见 validate_submission_full / test_production_contracts。"""
+    return validate_submission_full(contract, structural_only=True)
+
+# 历史别名：本文件内结构用例显式走 structure_only，避免掩盖全量门禁
 def validate_submission_contract(contract):
-    return validate_submission_structure(contract, structural_only=True)
+    return validate_submission_structure_only(contract)
 from scripts.director_review_gate import initial_review, validate_review
 from scripts.chapter_prompt_build import build as build_chapters
 
@@ -69,9 +74,12 @@ class FiveGateFixTests(unittest.TestCase):
                 "profile_path": "state/profile.json", "profile_sha256": fingerprint(path),
                 "profile_id": "drama", "mode": "advisory",
                 "rationale": "剧情类", "use_scope": ["editing"]}
-            self.assertEqual(validate(development, storyboard, style, project), [])
+            # P3.2：生产路径禁止 advisory 降级
+            self.assertTrue(any("enforce_envelope" in e for e in validate(development, storyboard, style, project)))
             development['grammar_reference']['mode'] = 'enforce_envelope'
-            self.assertTrue(any('生产验收尚未实现' in e for e in validate(development, storyboard, style, project)))
+            # production_reference + enforce → 可通过画像门（其它剧组错误另计）
+            errs = validate(development, storyboard, style, project)
+            self.assertFalse(any("缺 corpus" in e or "样本影片数不足" in e or "advisory" in e for e in errs), errs)
             profile["status"] = "exploratory_only"
             write(path, profile)
             self.assertTrue(any("指纹" in e for e in validate(development, storyboard, style, project)))
@@ -156,3 +164,27 @@ class FiveGateFixTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_full_submission_requires_project_dir_not_structural_only(self):
+        contract = {
+            "reference_mode": "omni_reference", "director_cut_status": "approved",
+            "prompt": "@hero walks", "subject_reference": {"required": False},
+            "backend_capabilities": {"verified": True, "omni_reference": True,
+                                     "timestamp_control": True, "multi_shot": True,
+                                     "reference_limits": {"image": 1, "audio": 0, "video": 0},
+                                     "max_duration_sec": 4, "resolutions": ["480p"]},
+            "reference_bindings": [{
+                "handle": "@hero", "modality": "image", "intents": ["subject"],
+                "binding_status": "uploaded", "asset_id": "a1",
+                "source": {"sha256": "sha256:abc"},
+            }],
+            "edit_shots": [{"id": "SH001", "start_sec": 0, "end_sec": 2, "cut_relation": "cut"}],
+            "duration_sec": 2, "resolution": "480p",
+            "estimated_cash_cny": 1, "cash_limit_cny": 10,
+        }
+        errors = validate_submission_full(contract, structural_only=False)
+        self.assertTrue(any("project_dir" in e for e in errors), errors)
+        structural = validate_submission_structure_only(contract)
+        # 结构路径不应要求 project_dir
+        self.assertFalse(any("project_dir" in e for e in structural), structural)

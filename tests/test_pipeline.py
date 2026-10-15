@@ -26,11 +26,15 @@ from scripts.prompt_build import compile_director_method, keyframe_moment
 from scripts.storyboard_build import apply_story_plan, REQUIRED_STORY_FIELDS
 from scripts.render_preview import resolve_visual_asset
 from scripts.audio_master import resolve_master, master_encoding_args, probe_audio
-from scripts.submission_contract import validate_submission_contract as validate_submission_structure
+from scripts.submission_contract import validate_submission_contract as validate_submission_full
+
+def validate_submission_structure_only(contract):
+    """仅结构；全量门禁由 test_production_contracts 覆盖。"""
+    return validate_submission_full(contract, structural_only=True)
 
 def validate_submission_contract(contract):
-    """历史测试仅验证结构；正式提交身份在test_production_gates中验证。"""
-    return validate_submission_structure(contract, structural_only=True)
+    """本文件历史结构用例；名称保留但显式只跑 structural_only。"""
+    return validate_submission_structure_only(contract)
 from scripts.omni_reference import (
     build_omni_reference_blueprint, validate_omni_reference_blueprint,
 )

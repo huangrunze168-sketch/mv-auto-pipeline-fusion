@@ -59,12 +59,16 @@ def snapshot(project, scope=None):
     add('state/style.json'); add('state/timeline.json')
     if (project / 'state/music_structure.json').exists(): add('state/music_structure.json')
     development = load(project, 'state/development.json')
-    if development.get('creative_workflow_revision') == 2:
-        sequence = load(project, 'state/sequence_direction.json')
-        add('state/sequence_direction.json', {
-            **{k: v for k, v in sequence.items() if k != 'shots'},
-            'shots': [s for s in sequence['shots'] if s['id'] in ids]})
-        for source in sequence['sources'].values(): add(source['path'])
+    # P3.1：默认强制 sequence_direction
+    if development.get('creative_workflow_revision') != 2:
+        raise ValueError(
+            'creative_workflow_revision 必须为 2；revision≠2 禁止跳过 sequence_direction'
+        )
+    sequence = load(project, 'state/sequence_direction.json')
+    add('state/sequence_direction.json', {
+        **{k: v for k, v in sequence.items() if k != 'shots'},
+        'shots': [s for s in sequence['shots'] if s['id'] in ids]})
+    for source in sequence['sources'].values(): add(source['path'])
     if development.get('grammar_reference'): add(development['grammar_reference']['profile_path'])
     timeline = load(project, 'state/timeline.json')
     add(timeline['master_audio'])

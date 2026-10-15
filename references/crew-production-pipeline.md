@@ -104,7 +104,7 @@ P1 机检：`lighting_plan` / `art_direction` / 逐镜 lighting·production_desi
 | 剪辑/节奏 | music_cue 对齐结构；曲速 pacing soft-max + exception | P0 |
 | 灯光/美术 | 禁空泛词；`key_direction` 枚举；topology.nodes ↔ axes/marks | P1 |
 | ZY | 无导演可出片；有导演须 SHA/轴 + `crew_constraints` 对齐镜头 | P1 |
-| 调度/动线 | continuous 比对 screen/eyeline；static 须 crossing_rule + 站位承接；非 continuous 须 time_relation_evidence；有意反向须 *_reverse_evidence | P2/P3 |
+| 调度/动线 | continuous 比对 screen/eyeline；static 须 crossing_rule + 站位承接；非 continuous 须 time_relation_evidence；有意反向须 *_reverse_evidence；body_orientation 反向须 body_orientation_evidence；revision 须为 2；film_grammar 生产 enforce_envelope | P2/P3 |
 | 注意力 | `novelty_axis` + `visual_change_code` 枚举与指纹 | P2 |
 | 人物美术 | 交接物禁空泛审美词 | P2 |
 | 审片/成本 | 正式提交走 `submission_contract`（含 animatic）；批量 ledger 须预演+样片批准 | P2 |

@@ -1,5 +1,14 @@
 # CHANGELOG · mv-auto-pipeline-fusion
 
+## 2026-10-15 · P3 收口审计剩余洞
+
+- P3.1：`creative_workflow_revision` 必须为 2；rehearsal/animatic/review 默认强制 `sequence_direction`
+- P3.2：生产路径 `film_grammar` 默认/`须` `enforce_envelope`；缺 corpus 阻断；达样本阈值→`production_reference`；移除「硬门禁不可用」永拦
+- P3.3：同场 continuous `body_orientation` 反向须 `body_orientation_evidence`
+- P3.4：测试显式 `structural_only` 命名；全量 submission 另测须 `project_dir`
+- P3.5：扩展中英空泛审美禁词
+- 加严：`pacing_exception` 证据长度/不得复读理由；跨 scene 短窗同 viewpoint/轴三连；submission 非 structural 须 crew_pipeline/rehearsal PASS+指纹
+
 ## 2026-10-15 · P3 堵动线豁免洞：time_relation / 反向须证据
 
 - 非 `continuous` 的 `time_relation` 必须写 `time_relation_evidence`，禁止用 ellipsis/flashback 静默跳过同场动线核验。

@@ -136,19 +136,24 @@ def build(project):
         inputs['development'], inputs['storyboard'],
         music_structure=music, timeline=timeline, fps=fps, project=project,
     )
-    if inputs['development'].get('creative_workflow_revision') == 2:
-        try:
-            from .sequence_direction import require
-        except ImportError:
-            from sequence_direction import require
-        path = project / 'state/sequence_direction.json'
-        version = digest(path)
-        sequence = require(project)
-        if digest(path) != version:
-            raise ValueError('导演序列版本在制作桌编译期间改变')
-        report['sequence_direction'] = sequence
-        expected[path] = version
-        expected.update({Path(s['path']): s['sha256'] for s in sequence['sources'].values()})
+    # P3.1：默认强制 sequence_direction；revision≠2 直接不合格
+    rev = inputs['development'].get('creative_workflow_revision')
+    if rev != 2:
+        raise ValueError(
+            'creative_workflow_revision 必须为 2；revision≠2 禁止跳过 sequence_direction'
+        )
+    try:
+        from .sequence_direction import require
+    except ImportError:
+        from sequence_direction import require
+    path = project / 'state/sequence_direction.json'
+    version = digest(path)
+    sequence = require(project)
+    if digest(path) != version:
+        raise ValueError('导演序列版本在制作桌编译期间改变')
+    report['sequence_direction'] = sequence
+    expected[path] = version
+    expected.update({Path(s['path']): s['sha256'] for s in sequence['sources'].values()})
     report['input_fingerprints'] = {str(k): v for k, v in expected.items()}
     folder = Path(__file__).resolve().parents[1]/'vendor/zy-cinematic-realism/references/directors'
     catalog = build_catalog(folder)
