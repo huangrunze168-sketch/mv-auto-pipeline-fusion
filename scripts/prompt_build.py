@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import sys
+import uuid
 from pathlib import Path
 try:
     from .crew_execution import execution_lines, scene_execution, cut_rehearsal
@@ -299,7 +300,24 @@ def main():
         'storyboard_sha256': sha256_file(storyboard_path),
         'cuts': cut_rehearsal(storyboard['shots']),
         'dynamic_review_required': True}, ensure_ascii=False, indent=2)+'\n')
-    atomic_batch(updates, expected=expected)
+    # 合镜/删镜后归档旧制作包；与新包发布同事务，失败恢复原文件。
+    current_ids = {shot['id'] for shot in storyboard['shots']}
+    retired = []
+    archive_root = project/'state/prompt_history'/uuid.uuid4().hex
+    folders = [prompts_dir, prompts_dir/'keyframes', prompts_dir/'motion']
+    memberships = {folder: sorted(folder.glob('SH*.json')) for folder in folders}
+    for folder, files in memberships.items():
+        for path in files:
+            if path.stem not in current_ids:
+                path.resolve().relative_to(project)
+                expected[path] = sha256_file(path)
+                archive = archive_root/path.relative_to(project)
+                stage(archive, path.read_bytes())
+                retired.append(path)
+    def unchanged_membership():
+        if any(sorted(folder.glob('SH*.json')) != files for folder, files in memberships.items()):
+            raise ValueError('编译期间提示词文件集合变化，拒绝混合发布')
+    atomic_batch(updates, expected=expected, before_commit=unchanged_membership, deletions=retired)
     print(json.dumps({"prompts": len(built), "character_fingerprint": character_fp,
                       "files": built}, ensure_ascii=False))
 

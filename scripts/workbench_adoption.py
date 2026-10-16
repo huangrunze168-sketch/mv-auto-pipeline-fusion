@@ -119,27 +119,22 @@ def adopt(project, bundle, imported, *, scope):
         rows = payload.get('lines', [])
         rows = [r for r in rows if r.get('type') != 'interlude']
         machine_source = payload.get('machine_timing_source')
+        aligned = None
         if machine_source:
+            try:
+                from .alignment_evidence import require as require_alignment
+            except ImportError:
+                from alignment_evidence import require as require_alignment
+            job, result, checked = require_alignment(project, timeline, machine_source)
             job_path = (project/machine_source['job_path']).resolve()
-            job_path.relative_to(project/'state/forced_alignment_jobs')
-            job = read(job_path)
             result_path = Path(job['result_path']).resolve()
-            result_path.relative_to(project/'analysis')
-            if job.get('status') != 'completed_alignment_unreviewed' or digest(result_path) != job['result_sha256']:
-                raise ValueError('独立强制对齐尚未实际完成或结果已改变')
-            aligned = read(result_path)['lines']
+            aligned = result['lines']
             if len(aligned) != len(rows) or any(
                 any(a.get(k) != b.get(k) for k in ('index','text','speaker'))
                 or a['start_candidate'] != b['start'] or a['end_candidate'] != b['end']
                 for a,b in zip(aligned, rows)):
                 raise ValueError('草稿边界未逐行对应实际强制对齐结果')
-            for name, value in job['inputs'].items():
-                source = Path(name).resolve()
-                if source != path:
-                    if digest(source) != value:
-                        raise ValueError('强制对齐的原曲或官方歌词已改变')
-                    expected[source] = value
-            expected.update({job_path: digest(job_path), result_path: job['result_sha256']})
+            expected.update(checked)
             timeline['machine_candidate_source'] = {'job_path': str(job_path), 'result_path': str(result_path),
                                                     'run_id': job['run_id'], 'status': 'unreviewed'}
         if len(rows) != len(originals):
@@ -156,7 +151,10 @@ def adopt(project, bundle, imported, *, scope):
                 raise ValueError('每行须有演唱者及具体边界复核说明')
             corrected.append({**old, 'start': start, 'end': end, 'speaker': row['speaker']})
             previous = end
-        interludes = payload.get('interludes', [])
+        interludes = payload.get('interludes')
+        if interludes is None:
+            # 兼容旧导出：缺字段代表未编辑，不能默默删除已经登记的间奏。
+            interludes = [r for r in timeline['lines'] if r.get('type') == 'interlude']
         if not isinstance(interludes, list):
             raise ValueError('间奏必须逐段记录')
         for index, row in enumerate(interludes, max(r['index'] for r in corrected)+1):
@@ -189,6 +187,17 @@ def adopt(project, bundle, imported, *, scope):
                       lines=[{**by_id.get(r['index'], {}), **r,
                               'observation': next(v['observation'] for v in rows if v['index'] == r['index'])}
                              for r in corrected if r['type'] != 'interlude'])
+        if aligned is not None:
+            review.update(boundary_source='forced_alignment', alignment_run_id=job['run_id'],
+                          alignment_result_sha256=job['result_sha256'])
+            for row, group in zip(review['lines'], aligned):
+                row['forced_alignment_word_range'] = [group['word_start_index'], group['word_end_index']-1]
+        else:
+            timeline.pop('machine_candidate_source', None)
+            updates[path] = encoded(timeline)
+            review['timeline_sha256'] = 'sha256:'+hashlib.sha256(updates[path].encode()).hexdigest()
+            for key in ('boundary_source','alignment_run_id','alignment_result_sha256'):
+                review.pop(key, None)
         updates[review_path] = encoded(review)
     else:
         drafts = payload.get('design_drafts', {})

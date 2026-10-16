@@ -9,9 +9,34 @@ import threading
 import unittest
 
 from scripts.review_workbench import build, import_draft, MediaHandler
+from scripts.pipeline_contracts import digest
 
 
 class ReviewWorkbenchTests(unittest.TestCase):
+    def test_rebuild_restores_only_current_bound_observations(self):
+        review_path=self.project/'state/timing_review.json'
+        review={'timeline_sha256':digest(self.path),'lines':[
+            {**self.timeline['lines'][0],'observation':'隔离机器候选说明，非听辨批准'}]}
+        review_path.write_text(json.dumps(review),encoding='utf8')
+        build(self.project,self.bundle)
+        session=json.loads((self.bundle/'session.json').read_text(encoding='utf8'))
+        self.assertEqual(session['timeline']['lines'][0]['observation'],'隔离机器候选说明，非听辨批准')
+        path,_=self.draft();review['lines'][0]['observation']='改动'
+        review_path.write_text(json.dumps(review),encoding='utf8')
+        with self.assertRaisesRegex(ValueError,'依据已变化'):import_draft(self.project,self.bundle,path)
+        review['timeline_sha256']='sha256:old';review_path.write_text(json.dumps(review),encoding='utf8')
+        other=self.root/'other-bundle';build(self.project,other)
+        self.assertNotIn('observation',json.loads((other/'session.json').read_text(encoding='utf8'))['timeline']['lines'][0])
+
+    def test_overlapping_interludes_rejected_before_import(self):
+        build(self.project,self.bundle)
+        path,draft=self.draft()
+        draft['interludes']=[dict(start=0,end=1,observation='隔离区间一'),
+                            dict(start=.5,end=1.5,observation='隔离区间二')]
+        path.write_text(json.dumps(draft),encoding='utf8')
+        with self.assertRaisesRegex(ValueError,'重叠'):
+            import_draft(self.project,self.bundle,path)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

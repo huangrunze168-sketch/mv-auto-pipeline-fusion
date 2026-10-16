@@ -15,6 +15,16 @@ def source_paths(project, timeline):
     return [Path(project)/source[key] for key in ('execution_path', 'review_path') if source.get(key)]
 
 
+def alignment_versions(project, timeline):
+    if not timeline.get('machine_candidate_source'):
+        return {}
+    try:
+        from .alignment_evidence import require
+    except ImportError:
+        from alignment_evidence import require
+    return require(project, timeline)[2]
+
+
 def errors(project, timeline):
     project = Path(project).resolve()
     failures = []
@@ -58,6 +68,18 @@ def errors(project, timeline):
                     and isinstance(word['word'], str) and word['word'].strip()):
                 failures.append('原始ASR逐词时间或文本无效')
         review = json.loads(review_path.read_text(encoding='utf8'))
+        aligned = None
+        if timeline.get('machine_candidate_source'):
+            try:
+                from .alignment_evidence import require
+            except ImportError:
+                from alignment_evidence import require
+            alignment_run, alignment_result, alignment_inputs = require(project, timeline)
+            aligned = alignment_result['lines']
+            if (review.get('boundary_source') != 'forced_alignment'
+                    or review.get('alignment_run_id') != alignment_run['run_id']
+                    or review.get('alignment_result_sha256') != alignment_run['result_sha256']):
+                failures.append('逐行复核未绑定当前独立对齐结果')
         if (review.get('decision') != 'approve' or review.get('reviewed_full_audio') is not True
                 or not str(review.get('reviewer', '')).strip()):
             failures.append('尚无逐行真实音频时间复核声明')
@@ -68,11 +90,20 @@ def errors(project, timeline):
         rows = review.get('lines', [])
         if not isinstance(rows, list) or len(rows) != len(vocal):
             return failures + ['时间复核没有逐行覆盖当前全部歌词']
-        for line, checked in zip(vocal, rows):
+        for index, (line, checked) in enumerate(zip(vocal, rows)):
             if any(checked.get(k) != line.get(k) for k in ('index', 'text', 'start', 'end', 'speaker')):
                 failures.append('时间复核与正式行不一致: ' + str(line.get('index')))
             if not str(checked.get('observation', '')).strip():
                 failures.append('缺少逐行边界听辨说明')
+            if aligned is not None:
+                group = aligned[index]
+                expected_range = [group['word_start_index'], group['word_end_index']-1]
+                if (checked.get('forced_alignment_word_range') != expected_range
+                        or any(group.get(k) != line.get(k) for k in ('index','text','speaker'))
+                        or abs(number(line['start'])-number(group['start_candidate'])) > .25
+                        or abs(number(line['end'])-number(group['end_candidate'])) > .25):
+                    failures.append('逐行边界没有绑定当前独立对齐的完整词范围')
+                continue
             a, b = checked['asr_word_range']
             if type(a) is not int or type(b) is not int or not 0 <= a <= b < len(words):
                 failures.append('逐行ASR词范围无效')
@@ -81,6 +112,8 @@ def errors(project, timeline):
                     or abs(number(line['start'])-number(words[a]['start'])) > .25
                     or abs(number(line['end'])-number(words[b]['end'])) > .25):
                 failures.append('逐行边界没有绑定邻近的有效ASR词范围，不能用局部词认证整段手写时间')
+        if aligned is not None and any(digest(p) != v for p, v in alignment_inputs.items()):
+            failures.append('独立对齐依据在复核期间改变')
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         failures.append('歌词时间来源无法核验: ' + str(exc))
     return failures

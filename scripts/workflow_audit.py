@@ -65,6 +65,11 @@ def audit(project, *, phase='before-delivery', submission=None, output_name='fin
 
     def timing():
         tl = load('state/timeline.json')
+        try:
+            from .timing_evidence import alignment_versions
+        except ImportError:
+            from timing_evidence import alignment_versions
+        versions.update(alignment_versions(project, tl))
         audio = gate_checks.resolve_source_audio(project, tl)
         lyric_path = project/'input/lyrics.txt'
         versions[lyric_path] = digest(lyric_path) if lyric_path.is_file() else None

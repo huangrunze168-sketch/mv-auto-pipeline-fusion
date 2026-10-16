@@ -40,11 +40,12 @@ def inputs(project, step):
             if timeline.get(name):
                 paths.append(project/timeline[name])
         try:
-            from .timing_evidence import source_paths
+            from .timing_evidence import source_paths, alignment_versions
         except ImportError:
-            from timing_evidence import source_paths
+            from timing_evidence import source_paths, alignment_versions
         evidence_paths = source_paths(project, timeline)
         paths += evidence_paths
+        paths += list(alignment_versions(project, timeline))
         if evidence_paths and evidence_paths[0].is_file():
             record = json.loads(evidence_paths[0].read_text(encoding='utf8'))
             if record.get('raw_path'):

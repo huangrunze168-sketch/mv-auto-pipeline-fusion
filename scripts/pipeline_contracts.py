@@ -106,9 +106,16 @@ def supported_transitions(shots):
     return errors
 
 
-def atomic_batch(updates, *, expected=None, before_commit=None):
+def atomic_batch(updates, *, expected=None, before_commit=None, deletions=()):
     """失败时恢复原文件；崩溃遗留事务会被后续调用阻断并自动恢复。"""
     paths = {Path(path).resolve(): payload for path, payload in updates.items()}
+    removed = {Path(path).resolve() for path in deletions}
+    expected_paths = {Path(path).resolve(): value for path, value in (expected or {}).items()}
+    if removed & set(paths):
+        raise ValueError('事务写入与删除目标重叠')
+    if any(path not in expected_paths or expected_paths[path] is None or not path.is_file() for path in removed):
+        raise ValueError('事务删除必须绑定现存文件的明确版本')
+    paths.update({path: b'' for path in removed})
     if not paths:
         return
     common = Path(os.path.commonpath([str(path.parent) for path in paths]))
@@ -149,7 +156,10 @@ def atomic_batch(updates, *, expected=None, before_commit=None):
         if before_commit is not None:
             before_commit()
         for path, name in stages.items():
-            os.replace(name, path)
+            if Path(path) in removed:
+                Path(path).unlink()
+            else:
+                os.replace(name, path)
         journal.unlink()
     except BaseException:
         if journal.exists():

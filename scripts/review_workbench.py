@@ -65,6 +65,22 @@ def build(project, output, media=None, reference=None):
     # 只复制实际媒体，不拼母带、不变速，不把技术预览冒充内嵌原生音轨。
     output.mkdir(parents=True)
     versions = {str(timeline_path): digest(timeline_path)}
+    review_path = project/'state/timing_review.json'
+    versions[str(review_path)] = digest(review_path) if review_path.is_file() else None
+    if review_path.is_file():
+        review = json.loads(review_path.read_text(encoding='utf8'))
+        if review.get('timeline_sha256') == versions[str(timeline_path)]:
+            observations = {row['index']:row for row in review.get('lines', [])}
+            for line in timeline['lines']:
+                observed = observations.get(line['index'], {})
+                if all(observed.get(k) == line.get(k) for k in ('index','text','start','end','speaker')):
+                    line['observation'] = observed.get('observation', '')
+    if timeline.get('machine_candidate_source'):
+        try:
+            from .timing_evidence import alignment_versions
+        except ImportError:
+            from timing_evidence import alignment_versions
+        versions.update({str(p): v for p,v in alignment_versions(project, timeline).items()})
     for path in [project/'input/lyrics.txt', *sorted((project/'input').glob('*.png'))]:
         versions[str(path)] = digest(path) if path.is_file() else None
     assets = {}
@@ -138,6 +154,9 @@ def import_draft(project, bundle, draft_path):
                        or not math.isfinite(row[k]) for k in ('start', 'end'))
                 or not 0 <= row['start'] < row['end'] <= duration):
             raise ValueError('间奏须有实际区间及观察说明')
+    ordered = sorted(interludes, key=lambda row: row['start'])
+    if any(a['end'] > b['start'] for a,b in zip(ordered, ordered[1:])):
+        raise ValueError('间奏区间重叠，禁止导入')
     record = {'schema_version': 1, 'session_id': session['session_id'],
               'session_sha256': digest(bundle/'session.json'), 'draft_sha256': digest(draft_path),
               'project_id': str(project), 'decision': 'pending', 'agent_inspected': False,
@@ -232,12 +251,14 @@ body{margin:24px;background:#16191f;color:#eee;font:16px system-ui}button,input,
 <p><button id="export">导出全部待核草稿 JSON</button></p><div id="status" role="status"></div>
 <script id="session" type="application/json">__SESSION__</script><script>
 const S=JSON.parse(document.getElementById('session').textContent),$=id=>document.getElementById(id);
-const D={schema_version:1,session_id:S.session_id,decision:'pending',lines:structuredClone(S.timeline.lines),findings:[],interludes:[],playback_events:[],design_drafts:structuredClone(S.design_drafts)};
+const D={schema_version:1,session_id:S.session_id,decision:'pending',lines:structuredClone(S.timeline.lines),findings:[],interludes:structuredClone(S.timeline.lines.filter(r=>r.type==='interlude').map(r=>({start:r.start,end:r.end,observation:r.observation||'',status:'pending'}))),playback_events:[],design_drafts:structuredClone(S.design_drafts)};
+if(S.timeline.machine_candidate_source)D.machine_timing_source=structuredClone(S.timeline.machine_candidate_source);
 const players={audio:$('audio')};$('audio').src=S.assets.audio.file;
 function log(name,e){if(D.playback_events.length<20000)D.playback_events.push({media:name,event:e.type,time_sec:e.target.currentTime,muted:e.target.muted,volume:e.target.volume,rate:e.target.playbackRate,wall_time:new Date().toISOString()});}
 for(const [name,a] of Object.entries(S.assets)){if(name!=='audio'){const box=document.createElement('div'),h=document.createElement('h2'),v=document.createElement('video');h.textContent=name==='candidate'?'候选片（自身原声）':'对标片（自身原声）';v.controls=true;v.preload='metadata';v.src=a.file;box.append(h,v);$('players').append(box);players[name]=v;}}
 for(const [name,p] of Object.entries(players)){const o=document.createElement('option');o.value=name;o.textContent={audio:'原曲',candidate:'候选片',reference:'对标片'}[name];$('target').append(o);for(const event of ['play','pause','ended','seeking','seeked','ratechange','volumechange','timeupdate'])p.addEventListener(event,e=>log(name,e));p.addEventListener('play',()=>{for(const other of Object.values(players))if(other!==p)other.pause();});p.addEventListener('error',()=>{$('status').textContent='媒体无法解码：'+name+'。请选择浏览器支持的媒体副本，不得据此批准。';});}
-$('addGap').onclick=()=>{const start=Number($('gapStart').value),end=Number($('gapEnd').value),observation=$('gapNote').value.trim();if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||start>=end||end>S.timeline.duration_sec||!observation){$('status').textContent='填写有效间奏范围和观察。';return;}D.interludes.push({start,end,observation,status:'pending'});const li=document.createElement('li');li.textContent=`${start.toFixed(3)}–${end.toFixed(3)}s：${observation}`;$('gaps').append(li);};
+function showGaps(){$('gaps').replaceChildren();D.interludes.forEach((row,i)=>{const li=document.createElement('li');li.textContent=`${row.start.toFixed(3)}–${row.end.toFixed(3)}s：${row.observation} `;const remove=document.createElement('button');remove.textContent='删除此间奏草稿';remove.onclick=()=>{D.interludes.splice(i,1);showGaps();$('status').textContent='已删除间奏草稿；正式时间轴未改变。';};li.append(remove);$('gaps').append(li);});}showGaps();
+$('addGap').onclick=()=>{const start=Number($('gapStart').value),end=Number($('gapEnd').value),observation=$('gapNote').value.trim();if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||start>=end||end>S.timeline.duration_sec||!observation){$('status').textContent='填写有效间奏范围和观察。';return;}if(D.interludes.some(r=>start<r.end&&end>r.start)){$('status').textContent='间奏范围重叠，请先删除待修改的旧区间。';return;}D.interludes.push({start,end,observation,status:'pending'});showGaps();$('status').textContent='已添加待核间奏草稿；正式时间轴未改变。';};
 D.lines.forEach((line,i)=>{const tr=document.createElement('tr'),jump=document.createElement('button');jump.textContent=line.index;jump.onclick=()=>{players.audio.currentTime=Number(D.lines[i].start);players.audio.play().catch(e=>$('status').textContent=e.message);};const first=document.createElement('td');first.append(jump);tr.append(first);const text=document.createElement('td');text.textContent=line.text||'[间奏]';tr.append(text);for(const key of ['start','end','speaker','observation']){const td=document.createElement('td'),input=document.createElement('input');input.type=['start','end'].includes(key)?'number':'text';input.step='0.001';input.value=line[key]??'';input.oninput=()=>D.lines[i][key]=input.type==='number'?Number(input.value):input.value;td.append(input);tr.append(td);}$('lyrics').append(tr);});
 $('mark').onclick=()=>$('time').value=players[$('target').value].currentTime.toFixed(3);
 $('add').onclick=()=>{const t=Number($('time').value),obs=$('observation').value.trim();if(!Number.isFinite(t)||t<0||!obs){$('status').textContent='填写有效时间与具体观察。';return;}const row={media:$('target').value,time_sec:t,dimension:$('dimension').value,observation:obs,status:'pending'};D.findings.push(row);const li=document.createElement('li');li.textContent=`${row.media} ${t.toFixed(3)}s ${row.dimension}：${obs}`;$('findings').append(li);$('observation').value='';};

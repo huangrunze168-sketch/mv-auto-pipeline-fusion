@@ -11,6 +11,25 @@ from test_visual_workflow import fixture, write
 
 
 class WorkbenchAdoptionTests(unittest.TestCase):
+    def test_legacy_export_does_not_silently_delete_existing_interlude(self):
+        timeline_path = self.project/'state/timeline.json'
+        value = json.loads(timeline_path.read_text(encoding='utf8'))
+        value['lines'][0]['end'] = 1.5
+        value['lines'].insert(1, {'index':3,'type':'interlude','text':'','start':1.5,'end':2,
+                                  'observation':'隔离测试既有间奏'})
+        write(timeline_path,value)
+        self.bundle = self.root/'new-bundle'
+        build(self.project,self.bundle)
+        session = json.loads((self.bundle/'session.json').read_text(encoding='utf8'))
+        self.payload.update(session_id=session['session_id'],lines=session['timeline']['lines'])
+        for row in self.payload['lines']:
+            row['observation']='隔离测试候选，不认证听辨'
+        result=adopt(self.project,self.bundle,self.imported(),scope='timing')
+        updated=json.loads(timeline_path.read_text(encoding='utf8'))
+        gaps=[r for r in updated['lines'] if r['type']=='interlude']
+        self.assertEqual([(r['start'],r['end']) for r in gaps],[(1.5,2)])
+        self.assertFalse(result['production_allowed'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
