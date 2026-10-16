@@ -1,5 +1,7 @@
 # mv-auto-pipeline-fusion
 
+本地有声审片入口：`scripts/review_workbench.py` 提供真实原曲/对标/候选播放器、逐行时间复核、逐镜观察和设计草稿；[使用与验收边界](references/review-workbench.md)。所有导入均待核，不自动认证AI听看或正式批准。
+
 音乐 MV 的设计、提示词编译、门禁与本地剪辑工作流（Agent Skill）。后端由用户选择，动态审美与口型需要真实审片，不保证无人参与自动产出合格成片。
 
 当前验证范围和未完成项见[当前验收状态](references/current-validation-status.md)。本地契约/媒体测试不是电影感证明；本轮用户否定的生成与返剪实验不作为成功范例。运行媒体、凭证和具体项目设计不随代码发布。
