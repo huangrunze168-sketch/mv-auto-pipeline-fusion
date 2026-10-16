@@ -2,6 +2,8 @@
 
 代码检查结构、权限、状态与版本，不代替 ZY 创作判断和实际审片。所有生成后端由用户提供；以下工具不发出生成请求。
 
+当前总流程见[实际执行流程](actual-execution-workflow.md)。新项目先完成独立ZY故事节拍与电影参考组织，执行 `organization_workflow.py propose → select` 冻结连续性结构，再填写以下导演执行文件。
+
 ## 数据与执行顺序
 
 1. `timeline.json`：权威歌词窗口和原始 `master_audio`。
@@ -9,7 +11,7 @@
 3. `development.json`：ZY 故事、参考规律、导演及场景开发记录。
 4. `visual_edit_plan.json`：视觉镜头独立设计，引用歌曲/歌词/音乐切点，明确景别、演唱与切镜理由。
 5. `story_plan.json`：每镜 Scene Master、来源节拍、连续性状态、导演执行决定与视频动作过程。
-6. `storyboard_build.py` 合并；`visual_development.py` 检查结构；`prompt_build.py` 编译三类提示词；关5/6通过后签发指纹。
+6. `development.organization_structure`绑定select返回的结构；执行`organization_workflow.py bind`核验四份导演设计并保存执行版本记录，再由`storyboard_build.py` 合并；`visual_development.py` 检查结构；`prompt_build.py` 编译三类提示词；关5/6通过后签发指纹。
 7. 用户选定静帧后端后，Agent 编译原生提示词、生成母版候选、单轴比较、实际审查，登记批准母版与关键帧。批次和费用服从用户预算。
 8. 用户选定视频后端并核验真实时长上限后构建章节、裁切母带资产、编译已批准关键帧对应的章节制作包。生成清单仍 `submission_ready=false`；外部适配层根据用户授权处理请求。
 9. 代表样片完整观看；审片绑定媒体和上游依赖指纹，记录动态与段落证据；新难点针对性验证。

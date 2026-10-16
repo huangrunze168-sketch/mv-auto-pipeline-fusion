@@ -95,6 +95,7 @@ def build_omni_reference_blueprint(
             "editorial_role": beat.get("editorial_role", ""),
             "cut_relation": beat.get("cut_relation", "") if index < len(beats) - 1 else "chapter_end",
             "story_change": beat["story_change"],
+            "film_grammar": beat.get('film_grammar'),
             "action": beat["current_action"],
             "camera": beat["camera_witness"],
         })

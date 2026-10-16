@@ -25,6 +25,16 @@ def generation_errors(project):
         errors.extend(receipt_errors(project))
         load = lambda name: json.loads((project/'state'/name).read_text(encoding='utf8'))
         timeline, storyboard, style = load('timeline.json'), load('storyboard.json'), load('style.json')
+        try:
+            from .film_grammar_bridge import require as require_organization
+        except ImportError:
+            from film_grammar_bridge import require as require_organization
+        require_organization(project, storyboard)
+        try:
+            from .sound_mix import require_plan
+        except ImportError:
+            from sound_mix import require_plan
+        require_plan(project, storyboard)
         errors.extend(timing_source_errors(project, timeline))
         path = project/'input/lyrics.txt'
         lyrics = path.read_text(encoding='utf8') if path.is_file() else ''

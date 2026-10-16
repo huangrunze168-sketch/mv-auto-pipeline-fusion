@@ -14,7 +14,6 @@ except ImportError:
     from submission_contract import validate_submission_contract
     from ledger import record as ledger_record, money, locked
 
-
 def load(path):
     return json.loads(Path(path).read_text(encoding='utf8'))
 

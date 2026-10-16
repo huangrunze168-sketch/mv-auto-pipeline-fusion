@@ -1,5 +1,7 @@
 # ZY Cinematic Realism → MV 提示词构造适配
 
+新项目执行顺序以[当前实际执行流程](actual-execution-workflow.md)为准；本文件说明对应阶段的细节。
+
 V1.4.1 执行顺序和数据契约见 `visual-workflow-contract.md`，导演级逐镜写法见 `director-scene-master.md`：故事、参考视觉、导演/摄影三链协同，不再把导演方法局限为 style 词汇或把歌词窗口等同视觉镜头。
 
 > 上游：[`popopo-99/zy-cinematic-realism`](https://github.com/popopo-99/zy-cinematic-realism)，内置版本 v2.5.0（提交 `9a3b36d1fb6a980ae9e21f74c86dd56bae443a4d`）。上游负责“画面是什么、如何被观看”；MV 流水线负责“画面何时发生、是否对口型、唱哪句、持续多久”。

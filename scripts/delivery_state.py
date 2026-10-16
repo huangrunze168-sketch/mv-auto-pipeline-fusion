@@ -239,7 +239,7 @@ def finish(project, record):
     try:
         report = verify_delivery(project / 'output' / record['output_name'],
                                  project / specification['master_audio'], specification['duration_sec'],
-                                 specification['fps'], specification['width'], specification['height'])
+                                 specification['fps'], specification['width'], specification['height'], project=project)
     except Exception as exc:
         fail(project, record, exc)
         raise

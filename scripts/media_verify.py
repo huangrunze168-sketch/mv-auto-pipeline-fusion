@@ -56,7 +56,7 @@ def audio_hash(path, copy=False):
     return result.stdout.strip()
 
 
-def verify_delivery(path, master, duration, fps, width, height):
+def verify_delivery(path, master, duration, fps, width, height, *, project=None):
     data = probe(path)
     video = next(s for s in data["streams"] if s["codec_type"] == "video")
     audio = next(s for s in data["streams"] if s["codec_type"] == "audio")
@@ -77,6 +77,17 @@ def verify_delivery(path, master, duration, fps, width, height):
     source_hash, output_hash = audio_hash(master, copy), audio_hash(path, copy)
     if source_hash != output_hash:
         errors.append("原始母带与交付音频载荷不一致")
+    sound_report = None
+    if project is not None:
+        try:
+            try:
+                from .sound_mix import verify as verify_sound
+            except ImportError:
+                from sound_mix import verify as verify_sound
+            sound_report = verify_sound(project, path, master)
+        except Exception as exc:
+            errors.append('声音转场交付核验失败: '+str(exc))
     return {"status": "blocked" if errors else "pass", "errors": errors, "streams": data["streams"],
+            "sound_mix": sound_report,
             "master_audio_hash": source_hash, "delivery_audio_hash": output_hash,
             "hash_mode": "encoded_packets" if copy else "decoded_pcm_s24le"}

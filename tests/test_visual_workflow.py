@@ -713,7 +713,7 @@ class VisualWorkflowTests(unittest.TestCase):
         self.assertFalse(advisory["errors"])
         self.assertTrue(any("平均镜长" in warning for warning in advisory["warnings"]))
         enforced = audit_storyboard(profile, {"shots": shots}, mode="enforce_envelope")
-        self.assertTrue(any("样本影片数不足" in error for error in enforced["errors"]))
+        self.assertTrue(any("缺少独立签名验收" in error for error in enforced["errors"]))
         self.assertTrue(any("平均镜长" in error for error in enforced["errors"]))
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
             project = Path(tmp)
@@ -728,7 +728,7 @@ class VisualWorkflowTests(unittest.TestCase):
             self.assertFalse(denied["errors"], denied)
             development["grammar_reference"]["mode"] = "enforce_envelope"
             blocked = audit_binding(development, {"shots": shots}, project)
-            self.assertTrue(any("样本影片数不足" in e for e in blocked["errors"]), blocked)
+            self.assertTrue(any("缺少独立签名验收" in e for e in blocked["errors"]), blocked)
             missing = audit_binding({}, {"shots": shots}, project)
             self.assertIsNone(missing)
             profile_path.write_text("{}", encoding="utf-8")

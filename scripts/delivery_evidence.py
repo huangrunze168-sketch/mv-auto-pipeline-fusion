@@ -69,6 +69,19 @@ def review_template(project, output_name):
 def require_review(project, output_name, path):
     expected = review_template(project, output_name)
     actual = load(path)
+    project = Path(project).resolve()
+    if (project/'state/lip_measurement.json').is_file():
+        try:
+            from .lip_measure import require as require_lip
+        except ImportError:
+            from lip_measure import require as require_lip
+        measurement = require_lip(project)
+        if load(project/'state/lip_measurement.json')['media_sha256'] != expected['media_sha256']:
+            raise ValueError('独立口型测量不是当前最终媒体')
+        actual['independent_lip_measurement'] = measurement
+    if (project/'state/sound_edit_plan.json').is_file():
+        if actual.get('sound_mix_review') != {'audio_track': 1, 'watched_full_with_mix': True}:
+            raise ValueError('须切换到第2音轨，完整复核J/L同期声混音并登记sound_mix_review')
     for key in ('project_id', 'output_name', 'media_sha256', 'storyboard_sha256', 'timeline_sha256'):
         if actual.get(key) != expected[key]: raise ValueError('最终动态复核绑定了旧文件或其他项目: ' + key)
     if (actual.get('scope') != expected['scope'] or actual.get('watched_full_audio_video') is not True or actual.get('simulation_only') is not False

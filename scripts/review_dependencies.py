@@ -37,6 +37,17 @@ def snapshot(project, scope=None):
     sb = load(project, 'state/storyboard.json')
     scenes = {s['scene_id'] for s in sb['shots'] if s['id'] in ids}
     result = {}
+    try:
+        from .film_grammar_bridge import require as require_organization
+    except ImportError:
+        from film_grammar_bridge import require as require_organization
+    result.update({str(p):v for p,v in require_organization(project,sb).items()})
+    try:
+        from .sound_mix import require_plan
+    except ImportError:
+        from sound_mix import require_plan
+    _, sound_versions = require_plan(project, sb)
+    result.update({str(p): sha for p, sha in sound_versions.items()})
     def add(relative, value=None):
         path = (project / relative).resolve()
         if not path.is_file():
@@ -69,7 +80,15 @@ def snapshot(project, scope=None):
         **{k: v for k, v in sequence.items() if k != 'shots'},
         'shots': [s for s in sequence['shots'] if s['id'] in ids]})
     for source in sequence['sources'].values(): add(source['path'])
-    if development.get('grammar_reference'): add(development['grammar_reference']['profile_path'])
+    if development.get('grammar_reference'):
+        binding = development['grammar_reference']
+        add(binding['profile_path'])
+        if binding.get('mode') == 'enforce_envelope':
+            try:
+                from .corpus_validation import require as require_corpus
+            except ImportError:
+                from corpus_validation import require as require_corpus
+            result.update({str(p):v for p,v in require_corpus(project, load(project, binding['profile_path']), sb, binding['certificate_path']).items()})
     timeline = load(project, 'state/timeline.json')
     add(timeline['master_audio'])
     for path in (project / 'input').glob('protagonist.*'): add(path)

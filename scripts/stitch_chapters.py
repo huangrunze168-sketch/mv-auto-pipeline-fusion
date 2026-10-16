@@ -192,6 +192,12 @@ def main():
     duration = float(timeline["duration_sec"])
     audio = resolve_master(project, timeline)
     audio_args = master_encoding_args(audio)
+    try:
+        from .sound_mix import require_plan, mux as mux_sound
+    except ImportError:
+        from sound_mix import require_plan, mux as mux_sound
+    sound_plan, sound_versions = require_plan(project, storyboard)
+    preview_expected.update(sound_versions)
     if args.allow_unreviewed_preview:
         if assembly_path.is_file():
             for clip, entry in zip(clips, assembly['entries']):
@@ -238,12 +244,15 @@ def main():
              "-r", str(fps), "-c:v", "libx264", "-preset", "medium", "-crf", "18",
              "-pix_fmt", "yuv420p", str(picture)])
         staged_output = tmp_path / 'export.mp4'
-        run(["ffmpeg", "-y", "-v", "error", "-i", str(picture), "-i", str(audio),
-             "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", *audio_args, str(staged_output)])
+        if sound_plan is not None:
+            mux_sound(project, picture, audio, staged_output, tmp_path)
+        else:
+            run(["ffmpeg", "-y", "-v", "error", "-i", str(picture), "-i", str(audio),
+                 "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", *audio_args, str(staged_output)])
         if delivery_record is not None:
             register_output(project, delivery_record, staged_output)
         else:
-            verification = verify_delivery(staged_output, audio, duration, fps, width, height)
+            verification = verify_delivery(staged_output, audio, duration, fps, width, height, project=project)
             publish_preview(project, staged_output, output, verification, preview_expected)
 
     if delivery_record is not None:

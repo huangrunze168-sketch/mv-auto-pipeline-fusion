@@ -98,6 +98,7 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
                 else "非演唱镜头；嘴唇自然闭合，不跟随人声开合"
             ),
             "cut_reason": direction["edit_trigger"],
+            "film_grammar": direction.get('film_grammar'),
             "cut_relation": chapter_shot.get("cut_relation", ""),
             "editorial_role": chapter_shot.get("editorial_role", ""),
             "motion_design": shot.get("motion_design", {}),
@@ -146,6 +147,12 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
         "【按时间执行的镜头】",
     ]
     for beat in beats:
+        try:
+            from .film_grammar_bridge import organization_text
+        except ImportError:
+            from film_grammar_bridge import organization_text
+        if beat.get('film_grammar'):
+            lines.append('- '+organization_text(beat['film_grammar']))
         lines.extend([
             f"[{beat['time']}] {beat['shot_id']}",
             f"- 变化：{beat['story_change']}",
@@ -220,6 +227,11 @@ def build(project: Path) -> dict:
     except ImportError:
         from crew_rehearsal import require_before_prompts
     require_before_prompts(project)
+    try:
+        from .film_grammar_bridge import require as require_organization
+    except ImportError:
+        from film_grammar_bridge import require as require_organization
+    expected.update(require_organization(project, storyboard))
     development = require_development(project, storyboard, style)
     if style.get('director_ref', {}).get('name'):
         try:

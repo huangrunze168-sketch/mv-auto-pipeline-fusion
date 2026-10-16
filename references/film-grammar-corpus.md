@@ -53,12 +53,12 @@ python scripts/film_grammar_corpus.py build normalized_shots.jsonl source_manife
 # 默认 advisory：只报告统计异常，不阻断
 python scripts/film_grammar_corpus.py audit PROJECT references/corpus/high-score-drama.json
 
-# enforce_envelope：可信外部生产验收尚未实现，当前始终阻断
+# enforce_envelope：必须提供独立签名验收，证书绑定画像、原始标注和逐镜语义适配
 python scripts/film_grammar_corpus.py audit PROJECT references/corpus/high-score-drama.json \
-  --mode enforce_envelope
+  --mode enforce_envelope --certificate state/film_corpus_review.json
 ```
 
-输出 `gates/film_grammar_reference.json`。建库始终标记 `exploratory_only` 和 `production_validation.status=unverified`。数量达标单独记录，不会升级生产状态；手填 `production_reference` 或 `verified` 也不能启用硬门禁。当前没有可信外部语料验收入口，`enforce_envelope` 失败关闭；`advisory` 保留建议性统计。来源条款字段完整只代表声明完整，不等于法律授权或真实标注质量已验证。
+输出 `gates/film_grammar_reference.json`。建库始终标记 `exploratory_only` 和 `production_validation.status=unverified`。数量达标单独记录，不会升级生产状态；手填 `production_reference` 或 `verified` 也不能启用硬门禁。`enforce_envelope`要求用户信任目录中的独立验收签名、原始来源、影片版本去重及逐镜语义适配，缺证据继续失败关闭；`advisory`保留建议性统计。签名格式和信任设置见[八项补齐说明](gap-integration-guide.md)。来源条款字段完整只代表声明完整，不等于法律授权或真实标注质量已验证。
 
 ## 在 MV 中怎样用
 

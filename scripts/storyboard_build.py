@@ -168,7 +168,7 @@ def apply_story_plan(project: Path, shots: list) -> tuple[str, dict, str | None]
             "purpose", "knowledge_state", "prop_state", "source_beat",
             "state_before", "state_after", "active_rule_ids", "director_decisions", "motion_design", "risk_tags",
             "decision_authority", "design_revision", "coverage_plan", "crew", "coverage_source_id",
-            "reference_exclusions", "sequence_direction",
+            "reference_exclusions", "sequence_direction", "film_grammar",
         }:
             if key in item:
                 shot[key] = item[key]

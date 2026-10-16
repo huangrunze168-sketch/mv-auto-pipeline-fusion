@@ -11,7 +11,7 @@ python scripts/review_workbench.py build PROJECT NEW_BUNDLE --media CANDIDATE.mp
 python scripts/review_workbench.py serve NEW_BUNDLE --port 8765
 ```
 
-打开 `http://127.0.0.1:8765/`。服务只监听本机，只读，无写入、审批或后端调用接口。支持单区间 HTTP Range 以便拖动和跳转，不列目录、不跟随目录外链接。编码不被浏览器支持时显示错误，不能据此批准。原曲和视频时间分别显示，未实现自动同步对齐。
+打开 `http://127.0.0.1:8765/`。服务只监听本机，只读，无写入、审批或后端调用接口。支持单区间 HTTP Range 以便拖动和跳转，不列目录、不跟随目录外链接。编码不被浏览器支持时显示错误，不能据此批准。原曲和视频时间分别显示；可开启原曲与候选同步、校准候选偏移并选择单路监听。同步设置保持待核，详见gap-integration-guide.md。
 
 构建复制实际媒体，绑定原文件和副本 SHA，不转码、不变速、不覆盖正式项目。必须使用新目录保留旧会话。包内含原媒体与本地路径，仅本地使用，不自动上传。
 

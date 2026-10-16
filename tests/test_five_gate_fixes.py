@@ -77,12 +77,12 @@ class FiveGateFixTests(unittest.TestCase):
                 "rationale": "剧情类", "use_scope": ["editing"]}
             self.assertEqual(validate(development, storyboard, style, project), [])
             development['grammar_reference']['mode'] = 'enforce_envelope'
-            self.assertTrue(any('认证未实现' in e for e in validate(development, storyboard, style, project)))
+            self.assertTrue(any('生产语料认证未通过' in e for e in validate(development, storyboard, style, project)))
             profile['status'] = 'exploratory_only'
             write(path, profile)
             self.assertTrue(any('指纹' in e for e in validate(development, storyboard, style, project)))
             development['grammar_reference']['profile_sha256'] = fingerprint(path)
-            self.assertTrue(any('认证未实现' in e for e in validate(development, storyboard, style, project)))
+            self.assertTrue(any('生产语料认证未通过' in e for e in validate(development, storyboard, style, project)))
             development['grammar_reference']['mode'] = 'advisory'
             self.assertEqual(validate(development, storyboard, style, project), [])
             development.pop('grammar_reference')

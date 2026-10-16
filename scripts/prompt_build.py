@@ -108,6 +108,11 @@ def main():
             "再重新运行 storyboard_build.py"
         )
     try:
+        from .film_grammar_bridge import require as require_organization
+    except ImportError:
+        from film_grammar_bridge import require as require_organization
+    expected.update(require_organization(project,storyboard))
+    try:
         from .crew_rehearsal import require_before_prompts
     except ImportError:
         from crew_rehearsal import require_before_prompts
@@ -241,6 +246,7 @@ def main():
             "audio_policy": audio_policy,
             "negative_prompt": negative,
             "direction": {
+                "film_grammar": shot.get('film_grammar'),
                 "sequence_direction": shot.get('sequence_direction'),
                 "method": compile_director_method(style, shot),
                 "crew_execution": execution_lines(shot.get('crew', {})),
@@ -288,6 +294,7 @@ def main():
             "crew_execution": execution_lines(shot.get('crew', {})),
             "director_method": prompt['direction']['method'],
             "sequence_direction": shot.get('sequence_direction'),
+            "film_grammar": shot.get('film_grammar'),
             "scene_master": prompt['direction']['scene_master'],
             "continuity": prompt['continuity'],
             "visual_rules": prompt['visual_rules'],

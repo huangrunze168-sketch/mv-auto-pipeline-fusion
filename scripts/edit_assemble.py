@@ -122,6 +122,12 @@ def build(project: Path, render: bool = False, technical_preview: bool = False) 
         from visual_development import require
         from chapter_plan_build import require_production_timing
     failures = supported_transitions(storyboard["shots"])
+    try:
+        from .sound_mix import require_plan
+    except ImportError:
+        from sound_mix import require_plan
+    _, sound_versions = require_plan(project, storyboard)
+    expected.update(sound_versions)
     if failures:
         raise ValueError("; ".join(failures))
     if render and not technical_preview:

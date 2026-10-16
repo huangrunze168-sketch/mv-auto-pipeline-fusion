@@ -4,6 +4,8 @@ import json
 import math
 import os
 import tempfile
+import threading
+from functools import wraps
 from pathlib import Path
 
 REFERENCE_INTENTS = {
@@ -101,11 +103,28 @@ def supported_transitions(shots):
                 errors.append(f"{shot.get('id')}叠化须指定正整数transition_duration_frames且有下一镜")
         elif kind not in {"hard_cut", "match_cut"}:
             errors.append(f"{shot.get('id')}本地渲染尚未实现 {editing.get('transition_type')}，不能宣称完成")
-        if editing.get("audio_transition", "straight") not in {"straight", "music_hit"}:
+        audio_kind = editing.get("audio_transition", "straight")
+        if audio_kind in {'J_cut', 'L_cut'}:
+            frames = editing.get('audio_transition_duration_frames')
+            if type(frames) is not int or frames <= 0 or index == len(shots)-1:
+                errors.append(f"{shot.get('id')}J/L声音转场须有下一镜及正整数audio_transition_duration_frames")
+        elif audio_kind not in {"straight", "music_hit"}:
             errors.append(f"{shot.get('id')}声画偏移尚未实现 {editing.get('audio_transition')}，需外部音效轨渲染证据")
     return errors
 
 
+_thread_write_lock = threading.RLock()
+
+
+def _serialize_threads(operation):
+    @wraps(operation)
+    def wrapped(*args, **kwargs):
+        with _thread_write_lock:
+            return operation(*args, **kwargs)
+    return wrapped
+
+
+@_serialize_threads
 def atomic_batch(updates, *, expected=None, before_commit=None, deletions=()):
     """失败时恢复原文件；崩溃遗留事务会被后续调用阻断并自动恢复。"""
     paths = {Path(path).resolve(): payload for path, payload in updates.items()}

@@ -28,7 +28,7 @@ STEPS = (
     ('歌词与时间轴', ('timing', 'execution_receipts'), '权威文本与时间须来自真实分析，不补写verified。'),
     ('音乐分析与导演提案', ('design',), '须核对音乐cue和对标氛围观察范围；机检不证明气质匹配。'),
     ('人物与参考职责', ('design', 'submission'), '真实上传和职责绑定；不能只在提示词写引用名。'),
-    ('八部门与连续性设计', ('design', 'sequence', 'crew_reports', 'execution_receipts'), '实际美术、灯光、调度和摄影须按同一场地交接。'),
+    ('电影镜头组织与剧组连续性', ('design', 'sequence', 'film_organization', 'crew_reports', 'execution_receipts'), '先用参考辅助信息/空间/动作关系成立，再进行导演风格化及剧组交接。'),
     ('逐镜提示词与剪辑预演', ('prompts', 'animatic', 'execution_receipts'), 'Scene Master完整编译，首次生成前完成带音乐预演审查。'),
     ('音乐窗口与口型安排', ('windows', 'execution_receipts'), '正式口型不得使用临时时间，主唱归属仍需听看。'),
     ('静帧与代表样片', ('assets', 'prototype'), '静帧和动态审片分别验证；接触表不等于动态观看。'),
@@ -36,7 +36,7 @@ STEPS = (
     ('返修', ('repairs',), '开放返修须绑定失败媒体并闭环重审；无登记返修也须执行当前批准链汇总。'),
     ('素材选段与全片审片', ('media_origins', 'sequence_review'), '按帧选段、任务下载来源、逐章及全片审查绑定真实素材和版本。'),
     ('技术验收与交付', ('delivery',), 'ready不等于用户接收；另核对完整交付包。'),
-    ('复盘与发布', (), '真实复盘、回归和版本依据；本工具不自动提交、打标签或发布。'),
+    ('复盘与发布', ('retrospective',), '核验实际回归、复盘及所选本地或远端版本；不自动发布。'),
 )
 
 
@@ -130,6 +130,20 @@ def audit(project, *, phase='before-delivery', submission=None, output_name='fin
     check('timing', timing)
     check('design', design)
     check('sequence', lambda: sequence_direction.require(project) and [])
+    def film_organization():
+        try:
+            from .film_grammar_bridge import require as require_organization
+        except ImportError:
+            from film_grammar_bridge import require as require_organization
+        versions.update(require_organization(project))
+    story_path=project/'state/story_plan.json'
+    organization_enabled=(project/'state/creative_workflow.json').is_file()
+    if story_path.is_file():
+        try:
+            organization_enabled=organization_enabled or bool(load('state/story_plan.json').get('film_grammar_bridge'))
+        except (OSError, ValueError, TypeError, AttributeError):
+            organization_enabled=True
+    check('film_organization', film_organization, organization_enabled)
     check('crew_reports', lambda: current_report_errors(project))
     check('prompts', prompts)
     check('windows', windows)
@@ -148,6 +162,13 @@ def audit(project, *, phase='before-delivery', submission=None, output_name='fin
     check('repairs', repairs, phase == 'before-delivery')
     check('sequence_review', lambda: director_review_gate.delivery_approved(project)[1], phase == 'before-delivery')
     check('delivery', lambda: _delivery_errors(project, output_name), phase == 'before-delivery')
+    def retrospective():
+        try:
+            from .release_evidence import require as require_release
+        except ImportError:
+            from release_evidence import require as require_release
+        versions.update(require_release(project))
+    check('retrospective', retrospective, phase == 'before-delivery')
     # 包含缺失文件标记；读取期间新建/修改也使本次结果失效。
     def changes():
         return [f'读取期间输入已改变: {p}' for p, version in versions.items()

@@ -213,7 +213,7 @@ def build_profile(records: list[dict[str, Any]], manifest: dict[str, Any], *,
 
 
 def audit_storyboard(profile: dict[str, Any], storyboard: dict[str, Any], *,
-                     mode: str = "advisory") -> dict[str, Any]:
+                     mode: str = "advisory", project=None, certificate_path=None) -> dict[str, Any]:
     if mode not in ALLOWED_MODES:
         raise ValueError("mode 必须为 advisory 或 enforce_envelope")
     errors: list[str] = []
@@ -221,7 +221,16 @@ def audit_storyboard(profile: dict[str, Any], storyboard: dict[str, Any], *,
     if profile.get("schema_version") != 1:
         errors.append("电影语法画像 schema_version 必须为 1")
     if mode == "enforce_envelope":
-        errors.append("生产语料认证未实现，enforce_envelope 不可用；样本影片数不足或自报 production_reference 均不能认证")
+        try:
+            try:
+                from .corpus_validation import require as require_certificate
+            except ImportError:
+                from corpus_validation import require as require_certificate
+            if project is None or not certificate_path:
+                raise ValueError('缺少独立签名验收及逐镜语义适配')
+            require_certificate(project, profile, storyboard, certificate_path)
+        except Exception as exc:
+            errors.append('生产语料认证未通过，enforce_envelope 不可用；自报 production_reference 不能认证: '+str(exc))
     shots = storyboard.get("shots") or []
     if not shots:
         errors.append("没有可审计镜头")
@@ -333,7 +342,8 @@ def audit_binding(development: dict[str, Any], storyboard: dict[str, Any],
     if binding["profile_id"] != profile.get("profile_id"):
         return {"status": "blocked", "errors": ["电影语法画像 profile_id 与绑定不一致"],
                 "warnings": [], "metrics": {}}
-    report = audit_storyboard(profile, storyboard, mode=mode)
+    report = audit_storyboard(profile, storyboard, mode=mode, project=project,
+                              certificate_path=binding.get('certificate_path'))
     report["profile"] = {"path": str(relative), "sha256": actual,
                          "profile_id": profile.get("profile_id")}
     return report
@@ -353,6 +363,7 @@ def main() -> int:
     audit.add_argument("project_dir", type=Path)
     audit.add_argument("profile", type=Path)
     audit.add_argument("--mode", choices=sorted(ALLOWED_MODES), default="advisory")
+    audit.add_argument("--certificate", help="项目内独立签名验收证书相对路径；生产模式必需")
     args = parser.parse_args()
     if args.command == "build":
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -366,7 +377,8 @@ def main() -> int:
     project = args.project_dir.resolve()
     profile = json.loads(args.profile.read_text(encoding="utf-8"))
     storyboard = json.loads((project / "state/storyboard.json").read_text(encoding="utf-8"))
-    report = audit_storyboard(profile, storyboard, mode=args.mode)
+    report = audit_storyboard(profile, storyboard, mode=args.mode, project=project,
+                              certificate_path=args.certificate)
     report["profile"] = {
         "path": str(args.profile.resolve()), "sha256": fingerprint(args.profile),
         "profile_id": profile.get("profile_id"),

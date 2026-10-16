@@ -1,5 +1,9 @@
 # mv-auto-pipeline-fusion
 
+当前执行主链：**歌曲与故事 → ZY 故事开发＋电影语料辅助组织 → 连续性设计 → ZY 导演执行 → 全能参考编译 → 视频生成与审片**。先读[实际执行流程与资料入口](references/actual-execution-workflow.md)，再按[电影组织交接](references/film-grammar-creative-bridge.md)执行。普通创作参考无需API密钥或语料签名。
+
+新增十二步持久编排、正式J/L声音轨、独立签名口型事件测量、电影语料验收、批量队列、复盘证据与审片同步，入口和兼容范围见[八项补齐使用说明](references/gap-integration-guide.md)。
+
 本地有声审片入口：`scripts/review_workbench.py` 提供真实原曲/对标/候选播放器、逐行时间复核、逐镜观察和设计草稿；[使用与验收边界](references/review-workbench.md)。所有导入均待核，不自动认证AI听看或正式批准。
 
 音乐 MV 的设计、提示词编译、门禁与本地剪辑工作流（Agent Skill）。后端由用户选择，动态审美与口型需要真实审片，不保证无人参与自动产出合格成片。
@@ -58,7 +62,7 @@ ASR原始结果、模型指纹和官方歌词匹配候选分别保存；草稿�
 
 主定义与完整流程见 [SKILL.md](SKILL.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
-V1.4.1 的数据填写、完整执行顺序与旧项目迁移见 [视觉开发执行契约](references/visual-workflow-contract.md)。逐镜导演构造见 [导演级 Scene Master 契约](references/director-scene-master.md)。先完成 ZY 的故事、导演、参考视觉和连续性记录，再生成场景母版、关键帧与视频；后端由用户选择。
+V1.4.1 的数据填写、完整执行顺序与旧项目迁移见 [视觉开发执行契约](references/visual-workflow-contract.md)。逐镜导演构造见 [导演级 Scene Master 契约](references/director-scene-master.md)。先完成ZY故事与电影参考组织、连续性结构选择，再完成绑定该结构的ZY导演执行，随后生成场景母版、关键帧与视频；后端由用户选择。
 
 ```bash
 # 1. 降级对齐（无 ASR key 的试跑时间轴；正式口型成片需接 ASR 通路）
@@ -67,7 +71,13 @@ python scripts/timeline_fallback.py input/song_16k.wav input/lyrics.txt state/ti
 # 2. 无视觉编辑方案时只输出时间骨架，不自动配景别与口型
 python scripts/storyboard_build.py <project_dir> --fps 24
 
-# 3. 调用 ZY 编写 development.json、visual_edit_plan.json、story_plan.json
+# 3. 先按ZY故事方法编写独立BEATS，再组织并选择连续性结构
+python scripts/organization_workflow.py propose --project <project_dir> --beats <BEATS.json> --index <INDEX.json> --output <PROPOSAL.json>
+# 修订提案，填写reviewer和decision=accept_structure后：
+python scripts/organization_workflow.py select --project <project_dir> --draft <PROPOSAL.json>
+# 按已选结构调用ZY导演方法编写development/visual_edit_plan/story_plan/sequence_direction
+# development.organization_structure必须填写select返回的binding
+python scripts/organization_workflow.py bind --project <project_dir>
 python scripts/storyboard_build.py <project_dir> --fps 24
 python scripts/visual_development.py <project_dir>
 python scripts/crew_pipeline.py <project_dir>
@@ -183,7 +193,7 @@ Scene Master、Continuity Bible、Shot Delta 与局部修复流程。缺少 `sta
 
 交付音轨必须来自 `timeline.master_audio` 的用户原始母带。`source_audio` 可为 ASR/对齐用的 16 kHz 副本，但不得用于交付。合成直接复制可承载的原始 MP3/AAC 音频流；PCM/FLAC 等转为 ALAC 无损音轨。原采样率和声道保留，生成片段音轨不进入母带重贴版。音轨对齐 PASS 仅代表时间一致，不代表音质一致。
 
-Python 3.10+（纯标准库）、ffmpeg/ffprobe。**视频生成后端由用户提供，skill 只提问不内置**；但所选模型必须通过多模态全能参考能力门禁，普通文生视频、单首帧图生视频和仅角色库模式均不可用于正式生成。未提供合格后端时流程止步于关 6 + 静帧预览成片（见 `references/api-backends.md` 后端门限）。
+基础校验与剪辑：Python 3.10+标准库及ffmpeg/ffprobe。ASR另用Python 3.12与`requirements-asr.txt`（faster-whisper/av/ctranslate2兼容版本）；多模态观察用`requirements-perception.txt`；独立验收签名用`requirements-validation.txt`。安装与实际入口见[使用说明](references/gap-integration-guide.md)。**视频生成后端由用户提供，skill 只提问不内置**；但所选模型必须通过多模态全能参考能力门禁，普通文生视频、单首帧图生视频和仅角色库模式均不可用于正式生成。未提供合格后端时流程止步于关 6 + 静帧预览成片（见 `references/api-backends.md` 后端门限）。
 
 ## License
 

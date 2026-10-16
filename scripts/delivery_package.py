@@ -117,6 +117,17 @@ def build(project, output_name='final_mv.mp4', *, review_path=None):
                'final_media_review.json': review_path, 'verification.json': verification,
                'repair_assessment.json': project / 'state/repair_assessment.json'}
     for p in sources.values(): versions.setdefault(p, digest(p))
+    extra_members = set()
+    if review.get('independent_lip_measurement'):
+        measurement = review['independent_lip_measurement']
+        versions.update({Path(p):v for p,v in measurement['versions'].items()})
+        sources['lip_measurement.json'] = project/'state/lip_measurement.json'
+        sources['lip_measure_review.json'] = project/'state/lip_measure_review.json'
+        extra_members.update(('lip_measurement.json', 'lip_measure_review.json'))
+    if (project/'state/sound_edit_plan.json').is_file():
+        sources['sound_edit_plan.json'] = project/'state/sound_edit_plan.json'
+        extra_members.add('sound_edit_plan.json')
+    for p in sources.values(): versions.setdefault(p, digest(p))
     script_paths = [Path(__file__).resolve(), Path(delivery_evidence.__file__).resolve(),
                     Path(__file__).with_name('align_verify.py').resolve()]
     versions.update({p: digest(p) for p in script_paths})
@@ -140,6 +151,7 @@ def build(project, output_name='final_mv.mp4', *, review_path=None):
                     'output_sha256': record['output_sha256'], 'artifact_root': str(root),
                     'dependencies': {str(p): s for p, s in versions.items() if p != state_path},
                     'members': {name: sha(value) for name, value in contents.items()},
+                    'optional_members': sorted(extra_members),
                     'audio_alignment': 'actual_candidate_audio_bound_to_video',
                     'lip_sync_verified': False, 'lip_sync_review_scope': review['scope'],
                     'artistic_approval': False, 'user_received': False}
@@ -175,6 +187,12 @@ def require_current(project, record):
     required = {'master.mp4', 'embedded_audio.mp4', 'storyboard.json', 'timeline.json', 'lyrics.txt', 'lyrics.lrc',
                 'final_media_review.json', 'verification.json', 'repair_assessment.json',
                 'alignment.json', 'alignment_execution.json', 'embedded_audio_execution.json', 'cost_audit.json'}
+    extras = set(manifest.get('optional_members', []))
+    expected_extras = set()
+    if (project/'state/lip_measurement.json').is_file(): expected_extras.update(('lip_measurement.json','lip_measure_review.json'))
+    if (project/'state/sound_edit_plan.json').is_file(): expected_extras.add('sound_edit_plan.json')
+    if extras != expected_extras: raise ValueError('交付包独立口型或混音材料覆盖不一致')
+    required.update(extras)
     if set(manifest.get('members', {})) != required: raise ValueError('交付包缺少必需产物')
     if manifest['members']['master.mp4'] != record['output_sha256']:
         raise ValueError('包内母带版不是当前实际输出')
