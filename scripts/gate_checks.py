@@ -33,6 +33,13 @@ if hasattr(sys.stdout, "reconfigure"):
 LIPSYNC_WHITELIST = {"大特写", "特写", "近景", "中景"}
 SIX_SECTIONS = ["style", "scene", "subject", "performance", "camera", "audio_policy"]
 SING_MARK_RE = re.compile(r"唱|开口唱|歌声")
+
+
+def nonlip_singing_marker(text):
+    """排除唱盘设备名和明确否定，不把DJ/闭口反应误判为演唱。"""
+    text = re.sub(r'唱(?:盘|片|机|臂|针)', '', text)
+    text = re.sub(r'(?:不得|不要|不能|禁止|不)(?:跟唱|演唱|唱歌|开口唱)', '', text)
+    return SING_MARK_RE.search(text)
 SPEECH_RE = re.compile(r"说.{0,4}[「\"'‘“]|说.{0,6}话")
 SECONDS_RE = re.compile(r"\d+(\.\d+)?\s*秒")
 LIP_NEG_RE = re.compile(r"lip|mouth|嘴|口型", re.I)
@@ -249,8 +256,8 @@ def check_prompt(pr: dict, timeline: dict, style: dict, has_protagonist: bool,
         f"decl={CLOSED_LIP_DECL in audio} neg_has_lip={bool(LIP_NEG_RE.search(neg))}")
 
     # 6 非口型段无唱歌标记
-    add(6, "非口型段无唱歌标记", lip or not SING_MARK_RE.search(perf + audio),
-        SING_MARK_RE.search(perf + audio))
+    add(6, "非口型段无唱歌标记", lip or not nonlip_singing_marker(perf + audio),
+        nonlip_singing_marker(perf + audio))
 
     # 7 景别白名单 + 模型中立生成职责
     expected_role = "lip_sync" if lip else "narrative"
@@ -515,9 +522,23 @@ def resolve_source_audio(proj: Path, timeline: dict):
 
 def audit_prompts(proj: Path, timeline: dict, style: dict) -> tuple[dict, bool]:
     """复用关5实时检查；不写指纹或批准，供CLI和项目审计共同调用。"""
-    has_protagonist = any((proj / "input").glob("protagonist.*"))
+    has_protagonist = any((proj / "input").glob("protagonist.*")) or (proj/'state/reference_roles.json').is_file()
     report = {"gate": 5, "checks": [], "shots": []}
     all_ok = True
+    roles = None
+    if (proj/'state/reference_roles.json').is_file():
+        try:
+            try:
+                from .reference_roles import require as require_roles
+            except ImportError:
+                from reference_roles import require as require_roles
+            roles, _ = require_roles(proj)
+            role_errors = []
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            role_errors = [str(exc)]
+        report['checks'].append({'item': '多人物原图与托管职责当前有效', 'pass': not role_errors,
+                                 'evidence': '; '.join(role_errors)})
+        all_ok &= not role_errors
     storyboard_path = proj / "state" / "storyboard.json"
     storyboard = load(storyboard_path) if storyboard_path.exists() else {"shots": []}
     try:
@@ -538,6 +559,11 @@ def audit_prompts(proj: Path, timeline: dict, style: dict) -> tuple[dict, bool]:
         file_ids.append(expected_id)
         shot = shot_map.get(prompt_id)
         checks = check_prompt(prompt, timeline, style, has_protagonist, shot)
+        if roles:
+            role_ok = (prompt.get('meta', {}).get('character_bindings') == roles['characters']
+                       and prompt.get('meta', {}).get('character_fingerprint') == 'sha256:'+sha256_file(proj/'state/reference_roles.json'))
+            checks.append({'item': '多人物身份与服装逐镜绑定一致', 'pass': role_ok,
+                           'evidence': '命名人物原图与职责登记逐项比较，不回退单一protagonist'})
         if storyboard.get('story_mode') == 'zy_story_visual_development':
             try:
                 from .crew_execution import validate_motion_package

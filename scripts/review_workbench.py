@@ -16,7 +16,7 @@ try:
 except ImportError:
     from pipeline_contracts import digest, atomic_batch
 
-DESIGN_FILES = ('development', 'sequence_direction', 'story_plan', 'music_structure', 'style')
+DESIGN_FILES = ('development', 'sequence_direction', 'story_plan', 'music_structure', 'style', 'visual_edit_plan')
 
 
 def design_template(name, duration):
@@ -38,6 +38,9 @@ def design_template(name, duration):
                                  'production_design', 'character_design', 'blocking', 'editing'])
     elif name == 'music_structure':
         base.update(duration_sec=duration, sections=[], cues=[], observed_audio=False)
+    elif name == 'visual_edit_plan':
+        base.update(shots=[], director_cut_approved=False, timing_status='pending_director_review',
+                    performance_policy={})
     return base
 
 
@@ -62,6 +65,8 @@ def build(project, output, media=None, reference=None):
     # 只复制实际媒体，不拼母带、不变速，不把技术预览冒充内嵌原生音轨。
     output.mkdir(parents=True)
     versions = {str(timeline_path): digest(timeline_path)}
+    for path in [project/'input/lyrics.txt', *sorted((project/'input').glob('*.png'))]:
+        versions[str(path)] = digest(path) if path.is_file() else None
     assets = {}
     for name, path in sources.items():
         before = digest(path)
@@ -124,6 +129,15 @@ def import_draft(project, bundle, draft_path):
                 raise ValueError('时间必须是有限数值')
         if not 0 <= row['start'] < row['end'] <= duration:
             raise ValueError('复核时间超出原曲')
+    interludes = draft.get('interludes', [])
+    if not isinstance(interludes, list):
+        raise ValueError('间奏须为区间列表')
+    for row in interludes:
+        if (not isinstance(row, dict) or not str(row.get('observation', '')).strip()
+                or any(isinstance(row.get(k), bool) or not isinstance(row.get(k), (int, float))
+                       or not math.isfinite(row[k]) for k in ('start', 'end'))
+                or not 0 <= row['start'] < row['end'] <= duration):
+            raise ValueError('间奏须有实际区间及观察说明')
     record = {'schema_version': 1, 'session_id': session['session_id'],
               'session_sha256': digest(bundle/'session.json'), 'draft_sha256': digest(draft_path),
               'project_id': str(project), 'decision': 'pending', 'agent_inspected': False,
@@ -212,17 +226,18 @@ body{margin:24px;background:#16191f;color:#eee;font:16px system-ui}button,input,
 </style><h1>本地有声审片工作台</h1>
 <p class="note">全部记录保持待核。真实播放器可听看；播放事件不能证明观察者完整审片，也不证明 AI 已听看。候选片播放自身原音，原曲单独复核；二者不自动同步、不拼成假原生音轨。</p>
 <div class="players" id="players"></div><section><h2>原曲与歌词时间复核</h2><audio id="audio" controls preload="metadata"></audio>
-<p>点行号跳到原曲候选起点；修改起止时间、演唱者并写边界听辨记录。修改只进入草稿。</p><table><thead><tr><th>行</th><th>歌词</th><th>开始</th><th>结束</th><th>演唱者</th><th>观察</th></tr></thead><tbody id="lyrics"></tbody></table></section>
+<p>点行号跳到原曲候选起点；修改起止时间、演唱者并写边界听辨记录。修改只进入草稿。</p><table><thead><tr><th>行</th><th>歌词</th><th>开始</th><th>结束</th><th>演唱者</th><th>观察</th></tr></thead><tbody id="lyrics"></tbody></table></section><section><h2>间奏区间复核</h2><p>只记录实际听辨的区间，不把歌词空档自动认作间奏。</p><input id="gapStart" type="number" step="0.001" min="0" placeholder="开始秒"><input id="gapEnd" type="number" step="0.001" min="0" placeholder="结束秒"><input id="gapNote" placeholder="声音及边界观察"><button id="addGap">添加待核间奏</button><ol id="gaps"></ol></section>
 <section><h2>逐镜观察</h2><select id="target"></select> <button id="mark">取当前时间</button> <input id="time" type="number" min="0" step="0.001" value="0"><select id="dimension"><option>口型与主唱</option><option>搓碟声画动作</option><option>群众反应与镜长</option><option>正反打与轴线</option><option>运镜与人物路径</option><option>光色美术与对标氛围</option><option>剪辑接点与情绪推进</option></select><textarea id="observation" placeholder="写具体可观察事实，不用“已看完/没问题”代替"></textarea><button id="add">添加观察</button><ol id="findings"></ol></section>
 <section><h2>设计与导演序列草稿</h2><p>缺失文件显示待填草稿，不写入正式 state。须完成真实创作和现有契约检查，不能以本工作台代替八部门交接。</p><select id="designName"></select><button id="saveDesign">保存当前设计草稿</button><textarea id="design"></textarea></section>
 <p><button id="export">导出全部待核草稿 JSON</button></p><div id="status" role="status"></div>
 <script id="session" type="application/json">__SESSION__</script><script>
 const S=JSON.parse(document.getElementById('session').textContent),$=id=>document.getElementById(id);
-const D={schema_version:1,session_id:S.session_id,decision:'pending',lines:structuredClone(S.timeline.lines),findings:[],playback_events:[],design_drafts:structuredClone(S.design_drafts)};
+const D={schema_version:1,session_id:S.session_id,decision:'pending',lines:structuredClone(S.timeline.lines),findings:[],interludes:[],playback_events:[],design_drafts:structuredClone(S.design_drafts)};
 const players={audio:$('audio')};$('audio').src=S.assets.audio.file;
 function log(name,e){if(D.playback_events.length<20000)D.playback_events.push({media:name,event:e.type,time_sec:e.target.currentTime,muted:e.target.muted,volume:e.target.volume,rate:e.target.playbackRate,wall_time:new Date().toISOString()});}
 for(const [name,a] of Object.entries(S.assets)){if(name!=='audio'){const box=document.createElement('div'),h=document.createElement('h2'),v=document.createElement('video');h.textContent=name==='candidate'?'候选片（自身原声）':'对标片（自身原声）';v.controls=true;v.preload='metadata';v.src=a.file;box.append(h,v);$('players').append(box);players[name]=v;}}
 for(const [name,p] of Object.entries(players)){const o=document.createElement('option');o.value=name;o.textContent={audio:'原曲',candidate:'候选片',reference:'对标片'}[name];$('target').append(o);for(const event of ['play','pause','ended','seeking','seeked','ratechange','volumechange','timeupdate'])p.addEventListener(event,e=>log(name,e));p.addEventListener('play',()=>{for(const other of Object.values(players))if(other!==p)other.pause();});p.addEventListener('error',()=>{$('status').textContent='媒体无法解码：'+name+'。请选择浏览器支持的媒体副本，不得据此批准。';});}
+$('addGap').onclick=()=>{const start=Number($('gapStart').value),end=Number($('gapEnd').value),observation=$('gapNote').value.trim();if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||start>=end||end>S.timeline.duration_sec||!observation){$('status').textContent='填写有效间奏范围和观察。';return;}D.interludes.push({start,end,observation,status:'pending'});const li=document.createElement('li');li.textContent=`${start.toFixed(3)}–${end.toFixed(3)}s：${observation}`;$('gaps').append(li);};
 D.lines.forEach((line,i)=>{const tr=document.createElement('tr'),jump=document.createElement('button');jump.textContent=line.index;jump.onclick=()=>{players.audio.currentTime=Number(D.lines[i].start);players.audio.play().catch(e=>$('status').textContent=e.message);};const first=document.createElement('td');first.append(jump);tr.append(first);const text=document.createElement('td');text.textContent=line.text||'[间奏]';tr.append(text);for(const key of ['start','end','speaker','observation']){const td=document.createElement('td'),input=document.createElement('input');input.type=['start','end'].includes(key)?'number':'text';input.step='0.001';input.value=line[key]??'';input.oninput=()=>D.lines[i][key]=input.type==='number'?Number(input.value):input.value;td.append(input);tr.append(td);}$('lyrics').append(tr);});
 $('mark').onclick=()=>$('time').value=players[$('target').value].currentTime.toFixed(3);
 $('add').onclick=()=>{const t=Number($('time').value),obs=$('observation').value.trim();if(!Number.isFinite(t)||t<0||!obs){$('status').textContent='填写有效时间与具体观察。';return;}const row={media:$('target').value,time_sec:t,dimension:$('dimension').value,observation:obs,status:'pending'};D.findings.push(row);const li=document.createElement('li');li.textContent=`${row.media} ${t.toFixed(3)}s ${row.dimension}：${obs}`;$('findings').append(li);$('observation').value='';};

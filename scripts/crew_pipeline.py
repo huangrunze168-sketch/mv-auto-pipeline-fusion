@@ -1189,8 +1189,25 @@ def validate_sequence_language(
             expected_edge = "left" if pblocking["exit_edge"] == "right" else "right"
             if blocking.get("entry_edge") not in {"none", expected_edge} and not reset:
                 errors.append(f"{sid} 入画边缘未接住上一镜出画边缘")
-        # P2 G4：同场 continuous 比对屏幕方向与视线象限
-        if continuous and same_scene and not reset:
+        # 正反打切换观察对象时，不能把甲的站位/视线当成乙的连续动作。
+        # 只有完整状态承接且两个对象的节点都能核对，才按不同主体处理。
+        prev_subject, curr_subject = pblocking.get('subject_id'), blocking.get('subject_id')
+        before_state, after_state = shot.get('state_before'), shot.get('state_after')
+        grounded_subject_switch = (
+            isinstance(prev_subject, str) and bool(prev_subject.strip())
+            and isinstance(curr_subject, str) and bool(curr_subject.strip()) and prev_subject != curr_subject
+            and isinstance(before_state, dict) and isinstance(after_state, dict)
+            and prev_subject in before_state and curr_subject in before_state and curr_subject in after_state
+            and bool(pblocking.get('end_mark')) and bool(blocking.get('start_mark')) and bool(blocking.get('end_mark'))
+            and before_state == previous.get('state_after')
+            and before_state.get(prev_subject) == pblocking.get('end_mark')
+            and before_state.get(curr_subject) == blocking.get('start_mark')
+            and after_state.get(curr_subject) == blocking.get('end_mark'))
+        if (continuous and same_scene and not reset and grounded_subject_switch
+                and not str(blocking.get('crossing_rule') or '').strip()):
+            errors.append(f'{sid} 切换观察对象仍须声明crossing_rule')
+        # P2 G4：同一对象的continuous镜头比对屏幕方向与视线象限。
+        if continuous and same_scene and not reset and not grounded_subject_switch:
             prev_screen = pblocking.get("screen_direction")
             curr_screen = blocking.get("screen_direction")
             if (prev_screen not in {None, "", "none", "static"}

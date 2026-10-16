@@ -24,6 +24,7 @@ python scripts/review_workbench.py serve NEW_BUNDLE --port 8765
 - sequence_direction：来源、窗口、信息、机位、人物路径、切点、光色、美术、表演。
 - music_structure：真实听辨的段落、cue和情绪；能量不等于音乐语义。
 - style：用户风格锁；草稿不能擅自转成 accepted。
+- visual_edit_plan：逐镜音乐锚点、主唱、切点关系与剪辑目的；导演批准保持关闭。
 
 导出按钮下载全部歌词、观察、播放事件和设计的待核 JSON。离开前先导出；当前无浏览器持久保存，不自动写项目。随后运行：
 
@@ -33,4 +34,17 @@ python scripts/review_workbench.py import-draft PROJECT NEW_BUNDLE EXPORTED_DRAF
 
 导入核验项目、会话、输入版本、媒体副本、歌词身份及有限且位于原曲内的时间；原子落盘前再次比较版本。原项目新增或改变设计使旧会话失效。新记录保存到 `state/review_workbench/`，独立随机文件名保留历史。
 
-外层始终 `decision=pending`、`agent_inspected=false`、`dynamic_verified=false`、`artistic_approval=false`。此入口拒绝 approve，不写正式 timeline、development、sequence_direction 或 director_review，不修改既有审批。采纳草稿须走原正式重建、执行和重审入口，禁止直接改名冒充生产文件。
+外层始终 `decision=pending`、`agent_inspected=false`、`dynamic_verified=false`、`artistic_approval=false`。导入入口拒绝 approve，不修改正式状态。正式采纳使用独立事务入口：
+
+```powershell
+python scripts/workbench_adoption.py timing PROJECT NEW_BUNDLE IMPORTED_RECORD
+python scripts/workbench_adoption.py design PROJECT NEW_BUNDLE IMPORTED_RECORD
+```
+
+时间采纳保留官方歌词，检查边界和独立间奏，仍保持逐行待核。携带机器对齐来源时，逐项匹配实际成功任务、原曲和歌词指纹、输出指纹及边界；机器成功不授予时间批准。设计须六份同时通过结构编译，才原子写入正式设计并归档旧版；撤销下游旧批准及过期执行记录，重新生成提示词并重审。不能直接改名草稿冒充已批准生产文件。
+
+## 本地机器观察与对齐
+
+`local_perception.py` 使用本地 Qwen2.5-Omni-3B 对真实媒体分段推理，保存模型、媒体指纹、抽取命令、张量形状和原始响应。完整音频覆盖与稀疏视频采样分别标注；输出只为机器观察候选，不证明逐帧口型或艺术批准。
+
+`music_capture.py` 实际计算起音、节拍、能量候选，不能凭能量填写音乐语义段落。`forced_alignment.py` 使用中文罗马化和 MMS-FA 强制对齐官方歌词，保存逐词分数；低分、与旧边界冲突之处仍须复核。三者使用隔离 Python 环境与本地模型，不调用视频生成后端；环境依赖见脚本说明和实际运行回执。

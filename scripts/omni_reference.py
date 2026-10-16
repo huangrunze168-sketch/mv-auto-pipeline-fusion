@@ -32,21 +32,30 @@ def build_omni_reference_blueprint(
         chapter: dict[str, Any], beats: list[dict[str, Any]], *,
         protagonist_source: dict[str, Any] | None,
         keyframe_sources: dict[str, dict[str, Any]],
+        character_sources: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """把人物、逐镜关键帧和章节音频编译成后端无关的全能参考蓝图。"""
 
     bindings: list[dict[str, Any]] = []
     subject_definitions: list[dict[str, Any]] = []
-    if protagonist_source:
-        bindings.append({
-            "handle": "@图片 1", "modality": "image",
-            "source": protagonist_source,
+    characters = character_sources if character_sources is not None else ([{
+        'character': 'protagonist', 'source': protagonist_source}] if protagonist_source else [])
+    character_handles = []
+    for number, character in enumerate(characters, 1):
+        handle = f'@图片 {number}'
+        character_handles.append(handle)
+        binding = {
+            "handle": handle, "modality": "image",
+            "source": character['source'],
             "intents": CHARACTER_INTENTS,
             "do_not_inherit": CHARACTER_EXCLUSIONS,
-            "binding_status": "awaiting_adapter_upload",
-        })
+            "binding_status": character.get('binding_status', 'awaiting_adapter_upload'),
+        }
+        if character.get('upload_receipt_path'):
+            binding['upload_receipt_path'] = character['upload_receipt_path']
+        bindings.append(binding)
         subject_definitions.append({
-            "subject_id": "protagonist", "handle": "@图片 1",
+            "subject_id": character['character'], "handle": handle,
             "retain": ["五官比例", "发型", "耳饰", "同一套服装的结构与材质"],
             "allow_change": ["表情", "视线", "姿态", "衣料运动", "自然受光"],
             "reject_transfer": CHARACTER_EXCLUSIONS,
@@ -77,8 +86,7 @@ def build_omni_reference_blueprint(
     timeline = []
     for index, beat in enumerate(beats):
         handles = [beat["keyframe_handle"], "@音频 1"]
-        if protagonist_source:
-            handles.insert(0, "@图片 1")
+        handles = character_handles+handles
         timeline.append({
             "shot_id": beat["shot_id"],
             "start_sec": beat["start_sec"],

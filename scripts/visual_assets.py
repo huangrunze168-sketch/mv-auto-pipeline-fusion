@@ -22,6 +22,13 @@ def dependency_snapshot(project: Path) -> dict:
                 for name in names if (project / "state" / name).is_file()}
     for path in (project / "input").glob("protagonist.*"):
         snapshot[path.relative_to(project).as_posix()] = fingerprint(path)
+    if (project/'state/reference_roles.json').is_file():
+        try:
+            from .reference_roles import require as require_roles
+        except ImportError:
+            from reference_roles import require as require_roles
+        _, versions = require_roles(project)
+        snapshot.update({str(p): value for p, value in versions.items()})
     return snapshot
 
 

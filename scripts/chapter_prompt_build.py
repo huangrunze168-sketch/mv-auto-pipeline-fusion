@@ -42,13 +42,19 @@ def relative_window(shot: dict, chapter_start: float) -> str:
 
 
 def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: str,
-                    has_character_reference: bool = True) -> dict:
+                    has_character_reference: bool = True, character_names: list[str] | None = None) -> dict:
     chapter_start = float(chapter["window"]["start"])
     shots = [prompt_map[sid] for sid in chapter["shot_ids"]]
     continuity = chapter.get("continuity_lock", {})
     chapter_shots = {item.get("id"): item for item in chapter.get("shot_deltas", [])}
     beats = []
-    first_keyframe_index = 2 if has_character_reference else 1
+    if character_names is not None and (len(character_names) != len(set(character_names))
+            or any(not isinstance(n, str) or not n.strip() for n in character_names)):
+        raise ValueError('人物名称须非空且唯一')
+    character_count = len(character_names) if character_names is not None else int(has_character_reference)
+    if character_count and not has_character_reference:
+        raise ValueError('人物名称不能缺失实际人物参考')
+    first_keyframe_index = character_count+1
     for shot_index, shot in enumerate(shots, first_keyframe_index):
         meta = shot["meta"]
         direction = shot.get("direction", {})
@@ -101,14 +107,17 @@ def compile_chapter(chapter: dict, prompt_map: dict[str, dict], aspect_ratio: st
         })
 
     reference_lines = []
-    if has_character_reference:
+    if character_names:
+        reference_lines.extend(f'@图片 {i}：{name}，只参考五官、发型、耳饰和服装，不继承背景、姿态、构图或灯光。'
+                               for i, name in enumerate(character_names, 1))
+    elif has_character_reference:
         reference_lines.append(
             "@图片 1：只参考同一人物的五官比例、发型、耳饰与服装构造；"
             "不参考背景、姿势、构图和灯光。"
         )
     reference_lines.extend(
         f"{beat['keyframe_handle']}：只参考 {beat['shot_id']} 的构图起点、人物站位与场景地理；"
-        + ("人物身份和服装仍服从 @图片 1。" if has_character_reference else
+        + (('人物身份和服装分别服从 '+ '、'.join(f'@图片 {i}' for i in range(1, character_count+1))+'。') if has_character_reference else
            "不得从该构图参考虚构固定人物身份。")
         for beat in beats
     )
@@ -244,7 +253,8 @@ def build(project: Path) -> dict:
             from crew_execution import validate_motion_package
         motion_errors = validate_motion_package(prompt, load(project/'prompts/motion'/path.name), fingerprint(path))
         if motion_errors: raise ValueError('; '.join(motion_errors))
-        checks = check_prompt(prompt, timeline, style, any((project / "input").glob("protagonist.*")), shot)
+        checks = check_prompt(prompt, timeline, style, any((project / "input").glob("protagonist.*"))
+                              or (project/'state/reference_roles.json').is_file(), shot)
         if (not all(item["pass"] for item in checks)
                 or prompt["meta"].get("development_fingerprint") != fingerprint(project / "state/development.json")
                 or prompt["meta"].get("shot_design_fingerprint") != shot_fingerprint(shot)):
@@ -262,13 +272,23 @@ def build(project: Path) -> dict:
     outputs = []
     protagonist = next(iter((project / "input").glob("protagonist.*")), None)
     if protagonist: expected[protagonist] = fingerprint(protagonist)
+    characters = None
+    if (project/'state/reference_roles.json').is_file():
+        try:
+            from .reference_roles import require as require_roles
+        except ImportError:
+            from reference_roles import require as require_roles
+        roles, role_versions = require_roles(project)
+        expected.update(role_versions)
+        characters = roles['reference_bindings']
     for chapter in plan.get("chapters", []):
         missing = [sid for sid in chapter.get("shot_ids", []) if sid not in prompt_map]
         if missing:
             raise FileNotFoundError("缺少逐镜提示词: " + ", ".join(missing))
         compiled = compile_chapter(
             chapter, prompt_map, aspect_ratio,
-            has_character_reference=protagonist is not None,
+            has_character_reference=bool(characters) or protagonist is not None,
+            character_names=[c['character'] for c in characters] if characters is not None else None,
         )
         compiled["keyframe_references"] = {
             sid: {"path": frames[sid]["path"], "sha256": frames[sid]["sha256"],
@@ -280,6 +300,7 @@ def build(project: Path) -> dict:
         } if protagonist else None)
         blueprint = build_omni_reference_blueprint(
             chapter, compiled["beats"], protagonist_source=protagonist_source,
+            character_sources=characters,
             keyframe_sources={
                 sid: {"local_path": frames[sid]["path"], "sha256": frames[sid]["sha256"]}
                 for sid in chapter["shot_ids"]

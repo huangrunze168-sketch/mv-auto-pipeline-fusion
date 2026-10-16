@@ -73,6 +73,13 @@ def snapshot(project, scope=None):
     timeline = load(project, 'state/timeline.json')
     add(timeline['master_audio'])
     for path in (project / 'input').glob('protagonist.*'): add(path)
+    if (project/'state/reference_roles.json').is_file():
+        try:
+            from .reference_roles import require as require_roles
+        except ImportError:
+            from reference_roles import require as require_roles
+        _, identity_versions = require_roles(project)
+        result.update({str(p): value for p, value in identity_versions.items()})
     registry = load(project, 'state/visual_assets.json')
     selected = {aid: asset for aid, asset in registry['assets'].items()
                 if (asset.get('kind') == 'scene_master' and asset.get('scene_id') in scenes)

@@ -37,7 +37,15 @@ def dependencies(project):
         names.append(str(registry))
         assets = json.loads(registry.read_text(encoding='utf-8'))['assets']
         names.extend(a['path'] for a in assets.values())
-    return {str((project / name).resolve()): digest(project / name) for name in names}
+    versions = {str((project / name).resolve()): digest(project / name) for name in names}
+    if (project/'state/reference_roles.json').exists():
+        try:
+            from .reference_roles import require
+        except ImportError:
+            from reference_roles import require
+        _, identities = require(project)
+        versions.update({str(p): value for p, value in identities.items()})
+    return versions
 
 
 def approved(project):

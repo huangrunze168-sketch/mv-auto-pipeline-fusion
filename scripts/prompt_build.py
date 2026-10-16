@@ -151,6 +151,15 @@ def main():
     protagonist = next(iter(sorted((project / "input").glob("protagonist.*"))), None)
     character_fp = sha256_file(protagonist) if protagonist else "none"
     if protagonist: expected[protagonist] = character_fp
+    character_roles = None
+    if (project/'state/reference_roles.json').is_file():
+        try:
+            from .reference_roles import require as require_roles
+        except ImportError:
+            from reference_roles import require as require_roles
+        character_roles, role_versions = require_roles(project)
+        expected.update(role_versions)
+        character_fp = sha256_file(project/'state/reference_roles.json')
     line_map = {line["index"]: line for line in timeline.get("lines", [])}
     keywords = "，".join(style.get("visual_keywords", []))
 
@@ -172,13 +181,15 @@ def main():
                    "仅在用户明确要求换装时更新服装锁；"
                    "场景、构图、光线及动作服从本镜 Scene Master，"
                    "表情、姿态、衣料运动与受光自然变化，不继承参考图姿势、构图、背景或灯光"
-                   if protagonist else "风沙中的边关环境与被岁月磨损的器物")
+                   if protagonist or character_roles else "本镜设计的场地、人物与道具；无人物参考时不伪造身份锁")
+        if character_roles:
+            subject = '；'.join(c['name']+'：'+c['path']+'，仅作身份与服装参考' for c in character_roles['characters'])+'；'+subject
         base_action = (f"{shot['current_action']}；视线目标：{shot['gaze_target']}；"
                        f"动作物理：{shot['action_physics']}")
         if lip:
             performance = f"{base_action}，唇形随歌词自然开合\n{lyric}"
             audio_policy = f"人声驱动口型，逐字对齐歌词「{lyric}」"
-            negative = "字幕, 水印, 念白, 面部变形, 多余人物, 夸张表情"
+            negative = "字幕, 水印, 念白, 面部变形, 未设计的闯入人物, 夸张表情"
         else:
             performance = base_action
             audio_policy = "嘴唇自然闭合，不跟随人声开合；母带只负责剪辑节奏"
@@ -206,7 +217,8 @@ def main():
                 "lyric_text": lyric,
                 "style_fingerprint": style.get("fingerprint"),
                 "character_fingerprint": character_fp,
-                "reference_duties": ["likeness", "wardrobe"] if protagonist else ["none"],
+                "reference_duties": ["likeness", "wardrobe"] if protagonist or character_roles else ["none"],
+                "character_bindings": character_roles['characters'] if character_roles else [],
                 "story_plan_fingerprint": storyboard.get("story_plan_fingerprint"),
                 "development_fingerprint": sha256_file(project / "state" / "development.json"),
             },
