@@ -178,6 +178,17 @@ def apply_story_plan(project: Path, shots: list) -> tuple[str, dict, str | None]
 
 
 def build(project: Path, fps: float = 24) -> dict:
+    try:
+        from .pipeline_contracts import digest, atomic_batch, require_no_transaction
+        from .sequence_direction import align_to_storyboard
+    except ImportError:
+        from pipeline_contracts import digest, atomic_batch, require_no_transaction
+        from sequence_direction import align_to_storyboard
+    project = Path(project).resolve()
+    require_no_transaction(project)
+    names = ('timeline', 'music_structure', 'visual_edit_plan', 'story_plan', 'development', 'sequence_direction', 'storyboard')
+    expected = {project / 'state' / (name + '.json'): digest(project / 'state' / (name + '.json'))
+                if (project / 'state' / (name + '.json')).is_file() else None for name in names}
     timeline = json.loads((project / "state" / "timeline.json").read_text(encoding="utf-8"))
     duration = float(timeline["duration_sec"])
     if not math.isfinite(duration) or duration <= 0 or not math.isfinite(fps) or fps <= 0:
@@ -208,16 +219,14 @@ def build(project: Path, fps: float = 24) -> dict:
                   "timeline_fingerprint": sha256_file(project / "state" / "timeline.json"),
                   "story_plan_fingerprint": story_fp, "continuity_bible": continuity,
                   "performance_policy": edit.get("performance_policy", {})}
-    (project / "state" / "storyboard.json").write_text(
-        json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    try:
-        try:
-            from .sequence_direction import realign_after_storyboard
-        except ImportError:
-            from sequence_direction import realign_after_storyboard
-        realign_after_storyboard(project, result)
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
+    updates = {}
+    sequence_path = project / 'state/sequence_direction.json'
+    if sequence_path.is_file() and result['story_mode'] != 'timing_only':
+        sequence = align_to_storyboard(json.loads(sequence_path.read_text(encoding='utf8')), result)
+        expected.update({Path(v['path']): v['sha256'] for v in sequence['sources'].values()})
+        updates[sequence_path] = json.dumps(sequence, ensure_ascii=False, indent=2) + '\n'
+    updates[project / 'state/storyboard.json'] = json.dumps(result, ensure_ascii=False, indent=2) + '\n'
+    atomic_batch(updates, expected=expected)
     return result
 
 

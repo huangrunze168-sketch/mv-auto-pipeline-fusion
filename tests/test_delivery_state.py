@@ -31,6 +31,9 @@ class DeliveryStateTests(unittest.TestCase):
                            ('storyboard', {'fps': 24}), ('style', {'aspect_ratio': '16:9'})]:
             (self.project / 'state' / f'{name}.json').write_text(json.dumps(data), encoding='utf-8')
         for target, kwargs in [
+            # 本组隔离交付状态机；真实生产前置链由ProductionContracts端到端测试。
+            ('require_current', {'return_value': None}),
+            ('require_package', {'return_value': {'scope': 'isolated_state_machine_fixture'}}),
             ('dependencies', {'side_effect': lambda project: {str(self.source): digest(self.source)}}),
             ('approved', {'return_value': (True, [])}),
             ('delivery_approved', {'return_value': (True, [])}),
@@ -57,6 +60,16 @@ class DeliveryStateTests(unittest.TestCase):
         self.assertFalse(result['user_received'])
         self.assertTrue(result['output_sha256'])
         self.assertTrue(result['verification_sha256'])
+
+    def test_missing_package_preserves_technical_state_without_ready(self):
+        record = delivery.begin(self.project, 'final_mv.mp4', self.specification)
+        delivery.register_output(self.project, record)
+        with patch.object(delivery, 'require_package', side_effect=ValueError('缺少实际交付包')):
+            with self.assertRaisesRegex(ValueError, '完整交付包'):
+                delivery.finish(self.project, record)
+        actual = delivery.read_record(self.project, 'final_mv.mp4')
+        self.assertEqual(actual['status'], 'technical_verified')
+        self.assertNotIn('ready', actual['history'])
 
     def test_output_changed_or_deleted_invalidates_ready(self):
         self.ready()

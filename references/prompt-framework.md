@@ -4,6 +4,8 @@
 
 ## 零、电影化构造前置层
 
+有用户对标时，先读 [对标氛围转译与提示词细化](benchmark-atmosphere.md)。把拉片中已观察到的空间压力、光色、现场反应、摄影距离及声画关系落实到下述六段式；逐镜与章节提示词不得把它们压缩成题材标签。细节充分性以可执行和可观察为准，不以字数为准。
+
 每镜先按 [`zy-cinematic-integration.md`](zy-cinematic-integration.md) 调用内置
 `vendor/zy-cinematic-realism/`：建立 Scene Master，选择必要的 Creative Grammar，完成具体瞬间、人物调度、空间层次、实际光源与物理可行机位。然后才把结果映射到下述六个字段。
 

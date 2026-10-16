@@ -1,5 +1,15 @@
 # 数据 Schema 规格
 
+项目执行策略`state/execution_policy.json`含project_id、严格布尔video_backend_access和原用户instruction记录；缺配置默认禁止，当前真实项目为false。`state/mcp_calls/CALL_ID/`保留call、完整response与tool_result；call含原进程创建标识、一次领取、实际参数SHA和nonce。作业request_archive_path指向不可改写的原请求字节；Lovart终态task_binding_kind=request_context明确以原任务调用关联，不假称原响应含任务ID。更多边界见[MCP交接契约](mcp-handoff-contract.md)。
+
+新增`media_origins.kind=derived`：含parent_clip、冻结plan_path/plan_sha256、repair_snapshot_path/SHA、execution_path/execution_sha256、compiled、repair_id及repair_plan_sha256。compiled保留精确fps_ratio、逐段源帧映射、源/输出画布、upscaled及aspect_stretched；回执绑定实际命令、进程结果和选段声音PCM匹配。新素材pending，章节批准并close以后才reviewed，详见[本地变换契约](local-transform-contract.md)。
+
+交付新增`state/delivery_packages/OUTPUT.mp4.json`，绑定export_id、specification_sha256、实际输出SHA、所有包成员/依赖和ZIP。`state/final_media_review.OUTPUT.mp4.json`绑定最终文件、时间轴、分镜与逐镜窗口/口形观察，默认pending。`delivery_state`的technical_verified不能直接视为ready；ready必须保存当前delivery_package核验结果和verified_versions。嘴型独立测量仍为false，详见[交付包契约](delivery-package-contract.md)。
+
+`state/repairs/REPAIR_ID.json`保存冻结失败媒体、来源/请求快照、失败审片、计划SHA及新任务修复结果；状态仅open/resolved。多轮历史通过supersedes及历史SHA连接。`state/repair_assessment.json`绑定当前逐章/全片批准、选段、素材和返修版本，结论为no_registered_repairs或all_repairs_resolved，均不授予艺术批准。正式交付缺此当前汇总即失败，详见[返修状态契约](repair-state-contract.md)。
+
+正式`generated_clips.json`每个clip必须含`origin_receipt_path`，指向`state/media_origins/*.json`。`kind=generated`绑定原completed作业、原生输出URL指针、HTTP文件SHA、原契约与视频SHA；`kind=retained`绑定明确用户授权原文、授权文件SHA及用途。两类登记均保留`artistic_approval=false`、`dynamic_verified=false`，不代替章节审片。正式`edit_assembly.json.origin_versions`保存全部来源依赖版本，合成与交付重新核验。详见[素材来源契约](media-origin-contract.md)。
+
 > 所有状态文件 JSON，UTF-8，字段名英文（铁律 C 语言分层）。时间单位一律秒（float），禁止字符串时间码进状态层。
 
 V1.4.1 以 `visual-workflow-contract.md` 和 `director-scene-master.md` 为新增视觉开发/资产/剪辑数据契约。下面的旧示例仅说明通用字段；新项目使用 schema_version=2、timing_mode=music_referenced_visual_edit、timing_refs、lyric_lines、scene_id 与显式 performance_policy。
@@ -44,6 +54,8 @@ V1.4.1 以 `visual-workflow-contract.md` 和 `director-scene-master.md` 为新�
 ```
 
 `source_audio` 可以是分析副本，`master_audio` 才是交付母带。`simulation_only=true`、`authority` 含 provisional/pending/diagnostic/fallback、`pending_review` 非空，或缺少 `production_timing_verified=true` 时，仍可做视觉开发，但不得准备正式口型章节。
+
+上述字段不是来源认证。正式生产还须提供`timing_source.execution_path`和`timing_source.review_path`，绑定原始ASR、原曲/歌词SHA及当前时间轴的逐行复核；详见[timing-evidence-contract.md](timing-evidence-contract.md)。真实识别与草稿生成不会自动设置批准。
 
 导出规则：`.lrc` 由 lines 生成，`[mm:ss.xx]text`；interlude 行不写文本。
 

@@ -32,7 +32,9 @@ class AdmissionRecoveryVersions(unittest.TestCase):
                 data['decision'] = 'pending'
                 self.put(review, data)
             return True, []
-        with patch('scripts.chapter_admission.approved', side_effect=validate):
+        # 本组隔离审片版本竞态；实际媒体来源链由MediaOrigin和ProductionContracts覆盖。
+        with patch('scripts.chapter_admission.approved', side_effect=validate), \
+                patch('scripts.media_origin.require', return_value={}):
             return require(self.project, {'shots': [{'id': 'S1'}]}, {'C1': {
                 'path': 'clip.mp4', 'sha256': digest(media), 'chapter_id': 'CH01',
                 'shot_ids': ['S1']}}, [{'shot_id': 'S1', 'clip_id': 'C1'}])

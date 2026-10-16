@@ -11,7 +11,8 @@ from pathlib import Path
 from test_visual_workflow import fixture, write, shot_crew_fixture, crew_bible_fixture, PNG_BYTES
 from scripts.storyboard_build import build
 from scripts.visual_development import validate, require, fingerprint
-from scripts.visual_assets import register, asset_errors
+from scripts.visual_assets import asset_errors
+from test_visual_workflow import register
 from scripts.crew_pipeline import validate_sequence_language
 from scripts.submission_contract import validate_submission_contract as validate_submission_full
 
@@ -74,17 +75,18 @@ class FiveGateFixTests(unittest.TestCase):
                 "profile_path": "state/profile.json", "profile_sha256": fingerprint(path),
                 "profile_id": "drama", "mode": "advisory",
                 "rationale": "剧情类", "use_scope": ["editing"]}
-            # P3.2：生产路径禁止 advisory 降级
-            self.assertTrue(any("enforce_envelope" in e for e in validate(development, storyboard, style, project)))
+            self.assertEqual(validate(development, storyboard, style, project), [])
             development['grammar_reference']['mode'] = 'enforce_envelope'
-            # production_reference + enforce → 可通过画像门（其它剧组错误另计）
-            errs = validate(development, storyboard, style, project)
-            self.assertFalse(any("缺 corpus" in e or "样本影片数不足" in e or "advisory" in e for e in errs), errs)
-            profile["status"] = "exploratory_only"
+            self.assertTrue(any('认证未实现' in e for e in validate(development, storyboard, style, project)))
+            profile['status'] = 'exploratory_only'
             write(path, profile)
-            self.assertTrue(any("指纹" in e for e in validate(development, storyboard, style, project)))
-            development["grammar_reference"]["profile_sha256"] = fingerprint(path)
-            self.assertTrue(any("样本影片数不足" in e for e in validate(development, storyboard, style, project)))
+            self.assertTrue(any('指纹' in e for e in validate(development, storyboard, style, project)))
+            development['grammar_reference']['profile_sha256'] = fingerprint(path)
+            self.assertTrue(any('认证未实现' in e for e in validate(development, storyboard, style, project)))
+            development['grammar_reference']['mode'] = 'advisory'
+            self.assertEqual(validate(development, storyboard, style, project), [])
+            development.pop('grammar_reference')
+            self.assertEqual(validate(development, storyboard, style, project), [])
 
     def test_global_lighting_change_invalidates_master_and_child(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as temp:

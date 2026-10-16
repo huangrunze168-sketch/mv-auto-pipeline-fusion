@@ -12,11 +12,13 @@ try:
     from .director_review_gate import dependency_snapshot, delivery_approved, approved
     from .animatic_review import approved as animatic_approved
     from .media_verify import verify_delivery
+    from .production_preflight import require_current
 except ImportError:
     from pipeline_contracts import atomic_batch, digest, require_no_transaction, RevisionConflict
     from director_review_gate import dependency_snapshot, delivery_approved, approved
     from animatic_review import approved as animatic_approved
     from media_verify import verify_delivery
+    from production_preflight import require_current
 
 
 def record_path(project, output_name):
@@ -77,10 +79,10 @@ def validate_specification(project, specification):
         raise ValueError('导出画布比例与项目不一致')
 
 
-def save(project, record, updates=None, before_commit=None):
+def save(project, record, updates=None, before_commit=None, additional_expected=None):
     path = record_path(project, record['output_name'])
     payload = json.dumps({k: v for k, v in record.items() if not k.startswith('_')}, ensure_ascii=False, indent=2)
-    atomic_batch({**(updates or {}), path: payload}, expected={path: record.get('_revision')},
+    atomic_batch({**(updates or {}), path: payload}, expected={**(additional_expected or {}), path: record.get('_revision')},
                  before_commit=before_commit)
     record['_revision'] = 'sha256:' + hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
@@ -100,6 +102,23 @@ def dependencies(project):
         result[str(media)] = digest(media)
     master_lock = project / 'state/master_audio_lock.json'
     if master_lock.exists(): result[str(master_lock.resolve())] = digest(master_lock)
+    try:
+        from .chapter_admission import require as require_chapters
+    except ImportError:
+        from chapter_admission import require as require_chapters
+    origins = {}
+    require_chapters(project, load(project / 'state/storyboard.json'),
+                     load(project / 'state/generated_clips.json')['clips'],
+                     load(project / 'state/edit_selection.json')['selections'], origins)
+    assembly = load(project / 'state/edit_assembly.json')
+    if assembly.get('origin_versions') != {str(path): sha for path, sha in origins.items()}:
+        raise ValueError('交付素材来源与正式选段记录不一致')
+    result.update({str(path): sha for path, sha in origins.items()})
+    try:
+        from .repair_state import require_assessed
+    except ImportError:
+        from repair_state import require_assessed
+    result.update({str(path): sha for path, sha in require_assessed(project).items()})
     return result
 
 
@@ -176,6 +195,9 @@ def check(project, output_name, persist=False):
                         or int(video['nb_read_frames']) != int(float(spec['duration_sec'])*float(spec['fps'])+1e-6)):
                     errors.append('验收实测流属性不符合导出规格')
         if record.get('status') == 'ready':
+            require_current(project)
+            if record.get('delivery_package') != require_package(project, record):
+                errors.append('交付包版本已改变')
             for validator in (approved, delivery_approved, animatic_approved):
                 ok, failures = validator(project)
                 if not ok: errors.extend(failures)
@@ -239,6 +261,7 @@ def finish(project, record):
         save(project, record)
         raise ValueError('交付版本失效: ' + '; '.join(current['errors']))
     errors = []
+    require_current(project)
     for validator in (approved, delivery_approved, animatic_approved):
         ok, failures = validator(project)
         if not ok: errors.extend(failures)
@@ -246,10 +269,38 @@ def finish(project, record):
         record.update(status='technical_verified', errors=errors)
         save(project, record)
         raise ValueError('技术验收通过，但交付审批未完成: ' + '; '.join(errors))
+    promote(project, record)
+    return report
+
+
+def require_package(project, record):
+    try:
+        from .delivery_package import require_current as require_delivery_package
+    except ImportError:
+        from delivery_package import require_current as require_delivery_package
+    return require_delivery_package(project, record)
+
+
+def promote(project, record):
+    """技术完成后，消费实际交付包及最终媒体复核，才进入ready。"""
+    project = Path(project).resolve()
+    if record.get('status') != 'technical_verified': raise ValueError('须先完成实际技术验收')
+    current = check(project, record['output_name'])
+    if current['errors'] or current.get('export_id') != record.get('export_id'):
+        raise ValueError('交付批准前版本已失效')
+    require_current(project)
+    for validator in (approved, delivery_approved, animatic_approved):
+        ok, errors = validator(project)
+        if not ok: raise ValueError('交付审批未完成: ' + '; '.join(errors))
+    try:
+        package = require_package(project, record)
+    except Exception as exc:
+        raise ValueError('技术验收完成，完整交付包或最终媒体复核尚未通过: ' + str(exc)) from exc
+    record['delivery_package'] = package
     record['status'] = 'ready'
     record['history'].append('ready')
-    save(project, record)
-    return report
+    save(project, record, additional_expected={**record.get('dependencies', {}), **package.get('verified_versions', {})})
+    return record
 
 
 def fail(project, record, error):

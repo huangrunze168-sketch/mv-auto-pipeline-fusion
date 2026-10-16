@@ -1,5 +1,6 @@
 """参考段落与导演序列交接；验证可执行事实，不批准审美。"""
 import argparse
+import copy
 import json
 import math
 import xml.etree.ElementTree as ET
@@ -7,9 +8,9 @@ import zipfile
 from pathlib import Path
 
 try:
-    from .pipeline_contracts import digest
+    from .pipeline_contracts import digest, atomic_batch, require_no_transaction
 except ImportError:
-    from pipeline_contracts import digest
+    from pipeline_contracts import digest, atomic_batch, require_no_transaction
 
 
 def ada_passage(path, start_ms, end_ms):
@@ -118,66 +119,46 @@ def require(project):
 
 
 
-def realign_after_storyboard(project, storyboard=None):
-    """分镜重建后：若已有导演序列，则按正式时间窗/机位对齐并回写执行事实。
+def align_to_storyboard(plan, storyboard):
+    """只吸附音乐时间窗；创作事实必须已由导演提供，不自动补写或改机位。"""
+    designed_shots, formal_shots = plan['shots'], storyboard.get('shots', [])
+    ids = [s['id'] for s in designed_shots]
+    if (not ids or len(ids) != len(set(ids))
+            or ids != [s.get('id') for s in formal_shots]):
+        raise ValueError('导演序列镜头集合与正式分镜不一致，须先重新设计')
+    result = copy.deepcopy(plan)
+    for designed, formal in zip(result['shots'], formal_shots):
+        camera = (formal.get('crew') or {}).get('cinematography') or {}
+        if (formal.get('current_action') != designed['action']
+                or camera.get('position_xy') != designed['camera_xyz'][:2]
+                or camera.get('shot_size') != designed.get('shot_size')):
+            raise ValueError('导演序列动作/机位/景别与分镜冲突，禁止自动改写: ' + formal['id'])
+        designed['window'] = [formal['window']['start'], formal['window']['end']]
+        formal['sequence_direction'] = copy.deepcopy(designed)
+    result['duration_sec'] = result['shots'][-1]['window'][1]
+    errors = validate(result)
+    if errors:
+        raise ValueError('时间窗吸附后导演序列无效: ' + '; '.join(errors))
+    return result
 
-    不创建序列；缺文件时原样返回。用于防止 revision=2 强制序列后，
-    仅因 rebuild storyboard 导致序列窗口漂移。
-    """
+
+def realign_after_storyboard(project, storyboard=None):
+    """兼容入口：显式检查后原子发布，不生成缺失设计，也不吞掉错误。"""
     project = Path(project).resolve()
-    path = project / "state/sequence_direction.json"
+    require_no_transaction(project)
+    path = project / 'state/sequence_direction.json'
     if not path.is_file():
         return None
-    if storyboard is None:
-        sb_path = project / "state/storyboard.json"
-        if not sb_path.is_file():
-            return None
-        storyboard = json.loads(sb_path.read_text(encoding="utf-8"))
-    plan = json.loads(path.read_text(encoding="utf-8"))
-    sources = plan.get("sources") or {}
-    if not sources:
-        return None
-    by_id = {s.get("id"): s for s in (plan.get("shots") or []) if s.get("id")}
-    new_shots = []
-    for formal in storyboard.get("shots") or []:
-        sid = formal.get("id")
-        window = formal.get("window") or {}
-        cam = ((formal.get("crew") or {}).get("cinematography") or {})
-        xy = cam.get("position_xy") or [0.0, 0.0]
-        prev = by_id.get(sid) or {}
-        action = formal.get("current_action") or prev.get("action") or "保持动作"
-        designed = {
-            "id": sid,
-            "window": [float(window.get("start", 0)), float(window.get("end", 0))],
-            "action": action,
-            "audience_gain": prev.get("audience_gain") or "推进叙事",
-            "camera_reason": prev.get("camera_reason") or "覆盖信息",
-            "cut_reason": prev.get("cut_reason") or "节奏切点",
-            "lighting": prev.get("lighting") or "主光稳定",
-            "art": prev.get("art") or "空间层次保留",
-            "performance": prev.get("performance") or "表演节拍",
-            "camera_xyz": [float(xy[0]), float(xy[1]), float((prev.get("camera_xyz") or [0, 0, 0])[2] if prev.get("camera_xyz") else 0.0)],
-            "actor_start_xy": prev.get("actor_start_xy") or [0.0, 0.0],
-            "actor_end_xy": prev.get("actor_end_xy") or [1.0, 0.0],
-            "shot_size": cam.get("shot_size") or prev.get("shot_size") or "中景",
-            "reference_ids": prev.get("reference_ids") or [next(iter(sources))],
-        }
-        new_shots.append(designed)
-        formal["current_action"] = action
-        formal["sequence_direction"] = designed
-        cinematography = (formal.setdefault("crew", {})).setdefault("cinematography", {})
-        if cinematography.get("position_xy") is None:
-            cinematography["position_xy"] = [float(xy[0]), float(xy[1])]
-        if not cinematography.get("shot_size"):
-            cinematography["shot_size"] = designed["shot_size"]
-    plan["shots"] = new_shots
-    if new_shots:
-        plan["duration_sec"] = float(new_shots[-1]["window"][1])
-    plan["artistic_approval"] = False
-    path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    sb_path = project / "state/storyboard.json"
-    sb_path.write_text(json.dumps(storyboard, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return plan
+    sb_path = project / 'state/storyboard.json'
+    expected = {p: digest(p) if p.is_file() else None for p in (path, sb_path)}
+    plan = json.loads(path.read_text(encoding='utf8'))
+    storyboard = copy.deepcopy(storyboard) if storyboard is not None else json.loads(sb_path.read_text(encoding='utf8'))
+    result = align_to_storyboard(plan, storyboard)
+    expected.update({Path(v['path']): v['sha256'] for v in result['sources'].values()})
+    atomic_batch({path: json.dumps(result, ensure_ascii=False, indent=2)+'\n',
+                  sb_path: json.dumps(storyboard, ensure_ascii=False, indent=2)+'\n'}, expected=expected)
+    return result
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

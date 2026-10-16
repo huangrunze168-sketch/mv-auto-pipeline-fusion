@@ -125,6 +125,11 @@ def build(project: Path, render: bool = False, technical_preview: bool = False) 
     if failures:
         raise ValueError("; ".join(failures))
     if render and not technical_preview:
+        try:
+            from .production_preflight import require_current
+        except ImportError:
+            from production_preflight import require_current
+        require_current(project)
         require(project, storyboard, load(project / "state/style.json"))
         require_production_timing(load(project / "state/timeline.json"), storyboard["shots"])
         ok, failures = approved(project)
@@ -134,12 +139,14 @@ def build(project: Path, render: bool = False, technical_preview: bool = False) 
     selections = load(project / "state" / "edit_selection.json")["selections"]
     entries = compile_selection(storyboard, clips, selections)
     chapter_approvals = {}
+    origin_versions = {}
     if render and not technical_preview:
         try:
             from .chapter_admission import require as require_chapters
         except ImportError:
             from chapter_admission import require as require_chapters
-        chapter_approvals = require_chapters(project, storyboard, clips, selections)
+        chapter_approvals = require_chapters(project, storyboard, clips, selections, origin_versions)
+        expected.update(origin_versions)
         for cid, sha in chapter_approvals.items():
             expected.setdefault(project / 'state/reviews' / f'{cid}.json', sha)
     for entry in entries:
@@ -165,6 +172,7 @@ def build(project: Path, render: bool = False, technical_preview: bool = False) 
                     raise ValueError('正式按帧选段须使用已核验CFR素材，不能以平均帧率替代时间戳检查')
     result = {"status": "rendered" if render else "planned", "entries": entries,
               "chapter_approvals": chapter_approvals,
+              "origin_versions": {str(path): sha for path, sha in origin_versions.items()},
               "technical_preview": technical_preview,
               "storyboard_sha256": fingerprint(project / "state" / "storyboard.json"),
               "selection_sha256": fingerprint(project / "state" / "edit_selection.json")}

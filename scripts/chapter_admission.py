@@ -10,8 +10,13 @@ except ImportError:
     from pipeline_contracts import digest
 
 
-def require(project, storyboard, clips, selections):
+def require(project, storyboard, clips, selections, origin_versions=None):
     project = Path(project).resolve()
+    try:
+        from .repair_state import require_closed
+    except ImportError:
+        from repair_state import require_closed
+    repairs = require_closed(project)
     plan = json.loads((project / 'state/chapter_plan.json').read_text(encoding='utf-8'))
     owners = {}
     for chapter in plan['chapters']:
@@ -22,6 +27,7 @@ def require(project, storyboard, clips, selections):
         raise ValueError('章节镜头归属没有完整匹配正式分镜')
     approvals = {}
     evidence = {}
+    sources = dict(repairs)
     for selection in selections:
         sid = selection['shot_id']
         cid = owners[sid]
@@ -51,7 +57,16 @@ def require(project, storyboard, clips, selections):
         if (actual != clip['sha256'] or actual != review['reviewed_media_sha256']
                 or source != (project / review['reviewed_media']).resolve()):
             raise ValueError(f'{cid} 所选素材不是该章节实际批准的媒体版本')
+        try:
+            from .media_origin import require as require_origin
+        except ImportError:
+            from media_origin import require as require_origin
+        require_origin(project, clip, sources)
     for cid, version in evidence.items():
         if digest(project / 'state/reviews' / f'{cid}.json') != version:
             raise ValueError(f'{cid} 审批版本在准入检查期间改变，请重试')
+    if any(digest(path) != sha for path, sha in sources.items()):
+        raise ValueError('素材准入期间来源依赖已改变')
+    if origin_versions is not None:
+        origin_versions.update(sources)
     return evidence

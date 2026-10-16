@@ -20,6 +20,7 @@ except ImportError:
     from visual_development import fingerprint
 
 SEQUENCE_DIMENSIONS = ("music_rhythm", "emotional_progression", "cut_relationships", "visual_grammar")
+REVIEW_SCHEMA_VERSION = 3
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -48,7 +49,7 @@ def initial_review(plan: dict) -> dict:
     if not prototype:
         raise ValueError("chapter_plan 缺少 production_policy.prototype_chapter")
     return {
-        "schema_version": 2,
+        "schema_version": REVIEW_SCHEMA_VERSION,
         "prototype_chapter": prototype,
         "reviewed_media": "",
         "reviewed_media_sha256": "",
@@ -146,7 +147,16 @@ def validate_crew_emotion_pull(review: dict, duration: float | None = None) -> l
     return errors
 
 
-def validate_review(review: dict, plan: dict) -> list[str]:
+def requires_crew_emotion_pull(review: dict) -> bool:
+    """新格式强制情绪拉片；仅兼容尚未包含两个新字段的 v2 审片记录。"""
+    checks = review.get("director_checks")
+    has_dimension = isinstance(checks, dict) and "song_emotion_match" in checks
+    if has_dimension or "crew_emotion_pull" in review:
+        return True
+    return review.get("schema_version") != 2
+
+
+def validate_review(review: dict, plan: dict, *, production=False) -> list[str]:
     errors = []
     expected = plan.get("production_policy", {}).get("prototype_chapter")
     if review.get("prototype_chapter") != expected:
@@ -180,7 +190,12 @@ def validate_review(review: dict, plan: dict) -> list[str]:
         errors.append("样片章节不存在")
     no_lipsync = (prototype is not None and bool(prototype.get("shot_deltas"))
                   and not any(item.get("lip_sync") for item in prototype["shot_deltas"]))
-    for name in DIMENSIONS:
+    emotion_gate_required = production or requires_crew_emotion_pull(review)
+    required_dimensions = (
+        DIMENSIONS if emotion_gate_required
+        else tuple(name for name in DIMENSIONS if name != "song_emotion_match")
+    )
+    for name in required_dimensions:
         item = checks.get(name, {})
         not_applicable = name == "lip_sync" and no_lipsync and item.get("status") == "not_applicable"
         if not (item.get("status") == "pass" or not_applicable):
@@ -191,7 +206,8 @@ def validate_review(review: dict, plan: dict) -> list[str]:
         item = review.get("sequence_checks", {}).get(name, {})
         if item.get("status") != "pass" or not str(item.get("evidence", "")).strip():
             errors.append(f"段落审片未通过或缺少证据: {name}")
-    errors.extend(validate_crew_emotion_pull(review, duration))
+    if emotion_gate_required:
+        errors.extend(validate_crew_emotion_pull(review, duration))
     findings = review.get("timecoded_findings", [])
     if not findings:
         errors.append("至少需要一条 timecoded_findings，证明审片基于动态时间线")
@@ -251,7 +267,7 @@ def _approved(project: Path, chapter_id=None) -> tuple[bool, list[str]]:
     if not path.is_file():
         return False, ["缺少 state/director_review.json"]
     review = json.loads(path.read_text(encoding="utf-8"))
-    errors = validate_review(review, plan)
+    errors = validate_review(review, plan, production=True)
     try:
         from .pipeline_contracts import require_no_transaction, timing_authority
     except ImportError:

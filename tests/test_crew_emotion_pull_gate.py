@@ -5,7 +5,9 @@ import unittest
 
 from scripts.director_review_gate import (
     DIMENSIONS,
+    REVIEW_SCHEMA_VERSION,
     initial_review,
+    requires_crew_emotion_pull,
     validate_crew_emotion_pull,
     validate_review,
 )
@@ -47,9 +49,53 @@ class CrewEmotionPullGateTests(unittest.TestCase):
     def test_dimension_registered(self):
         self.assertIn("song_emotion_match", DIMENSIONS)
 
+    def test_new_review_uses_v3_and_requires_pull(self):
+        review = initial_review(_base_plan())
+        self.assertEqual(review["schema_version"], REVIEW_SCHEMA_VERSION)
+        self.assertTrue(requires_crew_emotion_pull(review))
+
     def test_missing_pull_blocks(self):
         errors = validate_crew_emotion_pull({})
         self.assertTrue(any("crew_emotion_pull" in e for e in errors))
+
+    def test_legacy_v2_without_new_fields_remains_compatible(self):
+        plan = _base_plan(4.0)
+        plan["chapters"][0]["duration_sec"] = 4.0
+        review = _pass_review(plan, 4.0)
+        review["schema_version"] = 2
+        review["director_checks"].pop("song_emotion_match")
+
+        self.assertFalse(requires_crew_emotion_pull(review))
+        self.assertEqual(validate_review(review, plan), [])
+
+    def test_v3_without_new_fields_is_blocked(self):
+        plan = _base_plan(4.0)
+        plan["chapters"][0]["duration_sec"] = 4.0
+        review = _pass_review(plan, 4.0)
+        review["director_checks"].pop("song_emotion_match")
+
+        errors = validate_review(review, plan)
+        self.assertTrue(any("song_emotion_match" in error for error in errors), errors)
+        self.assertTrue(any("crew_emotion_pull" in error for error in errors), errors)
+
+    def test_legacy_schema_cannot_bypass_production_emotion_gate(self):
+        plan = _base_plan(4.0)
+        review = _pass_review(plan, 4.0)
+        review['schema_version'] = 2
+        review['director_checks'].pop('song_emotion_match')
+        errors = validate_review(review, plan, production=True)
+        self.assertTrue(any('song_emotion_match' in e for e in errors), errors)
+        self.assertTrue(any('crew_emotion_pull' in e for e in errors), errors)
+
+    def test_partially_migrated_v2_still_enforces_new_gate(self):
+        plan = _base_plan(4.0)
+        plan["chapters"][0]["duration_sec"] = 4.0
+        review = _pass_review(plan, 4.0)
+        review["schema_version"] = 2
+
+        self.assertTrue(requires_crew_emotion_pull(review))
+        self.assertTrue(any("crew_emotion_pull" in error
+                            for error in validate_review(review, plan)))
 
     def test_v10_regen_segments_block_approve(self):
         """对标《笼》v10 拉片：60–90 / 90–109 P0 REGEN，52–60 P1 PARTIAL 须重生。"""

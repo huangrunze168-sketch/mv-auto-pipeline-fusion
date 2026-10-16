@@ -160,7 +160,7 @@ def validate(development: dict, storyboard: dict, style: dict,
         errors.append("没有视觉分镜，不能编译生成制作包")
     else:
         errors.extend(validate_crew_pipeline(development, storyboard, project=project))
-    # 画像硬检已并入 validate_crew_pipeline（project 非空时缺 corpus 阻断）
+    # 可选画像绑定由 validate_crew_pipeline 校验；不能以统计认证审美。
     if "grammar_reference" in development:
         if not isinstance(development["grammar_reference"], dict) or not development["grammar_reference"]:
             errors.append("电影画像绑定必须是非空对象；不使用画像时请省略 grammar_reference")

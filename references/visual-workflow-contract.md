@@ -114,7 +114,9 @@ python scripts/gate_checks.py gate6 PROJECT
 
 # 用户所选静帧后端生成图片后，实际审查并登记；此命令不看图、不生成。
 python scripts/visual_assets.py register PROJECT --id MASTER_GATE --kind scene_master --scene gate --path IMAGE_PATH --evidence REVIEW_EVIDENCE
+python scripts/visual_assets.py approve-static PROJECT --id MASTER_GATE --observed-sha256 IMAGE_SHA256 --observer REVIEWER --evidence ACTUAL_STATIC_OBSERVATION
 python scripts/visual_assets.py register PROJECT --id SH001 --kind keyframe --scene gate --path KEYFRAME_PATH --parent MASTER_GATE --evidence REVIEW_EVIDENCE
+python scripts/visual_assets.py approve-static PROJECT --id SH001 --observed-sha256 KEYFRAME_SHA256 --observer REVIEWER --evidence ACTUAL_STATIC_OBSERVATION
 python scripts/visual_assets.py check PROJECT
 python scripts/visual_revision.py remix BASE_JSON --candidate VARIANT_JSON --axis camera
 python scripts/visual_revision.py repair REPAIR_PLAN_JSON

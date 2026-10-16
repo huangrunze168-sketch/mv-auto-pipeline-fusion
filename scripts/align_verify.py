@@ -129,9 +129,16 @@ def main():
         dur = float(w["end"]) - float(w["start"])
         ref = seg_env(ref_env, float(w["start"]), dur)
         c, lag = best_lag(candidate_env, ref, float(w["start"]))
+        sample_start, sample_end = round(float(w['start'])*SR), round(float(w['end'])*SR)
+        exact_samples = (sample_end <= len(x) and sample_end <= len(candidate_x)
+                         and sample_end > sample_start
+                         and x[sample_start:sample_end] == candidate_x[sample_start:sample_end])
+        if exact_samples:
+            c, lag = 1.0, 0.0
         ok2 = abs(lag) < LAG_TOL and c > CORR_MIN
         c2.append({"shot_id": s["id"], "expected_start": w["start"],
-                   "best_lag": round(lag, 3), "correlation": round(c, 3), "pass": ok2})
+                   "best_lag": round(lag, 3), "correlation": round(c, 3), "pass": ok2,
+                   "method": "exact_pcm_samples" if exact_samples else "envelope_correlation"})
         candidate_segment = seg_env(candidate_env, float(w["start"]), dur)
         e = sum(candidate_segment) / max(1, len(candidate_segment))
         ok3 = (not s.get("lip_sync")) or e > ENERGY_MIN

@@ -4,7 +4,53 @@
 
 当前验证范围和未完成项见[当前验收状态](references/current-validation-status.md)。本地契约/媒体测试不是电影感证明；本轮用户否定的生成与返剪实验不作为成功范例。运行媒体、凭证和具体项目设计不随代码发布。
 
+当前任务明确禁止使用生成视频后端。项目策略默认关闭，预占/派发/回查/MCP领取均检查该约束，宿主桥接也默认拒绝外部调用；只做本地分析、现有媒体与离线测试。详见[MCP交接和后端禁用](references/mcp-handoff-contract.md)。
+
 十二步业务流程，机器/人工/外部职责见 [生产契约](references/production-hardening.md)，真实门禁入口见 [registry](references/gate-registry.json)。`gate_checks.py` 实际提供gate1/gate5/gate6，检查数从报告读取。
+
+逐步检查入口为 `scripts/workflow_audit.py`，复用现有校验，输出十二步缺口；不会补建状态或审批。最近一次真实项目的跳步与代码修正见 [2026-10-16工作流审计](references/workflow-audit-2026-10-16.md)。
+
+```bash
+python scripts/workflow_audit.py PROJECT --phase before-generation --submission SUBMISSION.json
+python scripts/workflow_audit.py PROJECT --phase before-batch --submission SUBMISSION.json
+python scripts/workflow_audit.py PROJECT --phase before-delivery --output-name final_mv.mp4
+```
+
+原生请求和上传回执通过后，视频提交须先 `python scripts/submission_jobs.py prepare PROJECT --contract SUBMISSION.json` 预占预算，再由用户选定外部适配器调用dispatch。制作包pass不能直接当派发许可；未知调用不得自动重试。详见[提交作业契约](references/submission-job-contract.md)。
+
+原任务完成后，用 `python scripts/media_origin.py PROJECT --job-id JOB --output-pointer /实际输出字段` 实际下载并登记来源。正式素材须有`origin_receipt_path`；保留素材绑定用户授权原文。正式选段、合成和交付会重新核验来源，详见[素材来源契约](references/media-origin-contract.md)。登记来源不自动批准动态审片。
+
+返修通过`repair_state.py open/close`绑定失败媒体、冻结计划、新任务和新章重审。全片审片后须执行`python scripts/repair_state.py assess PROJECT`，交付核验该汇总；没有登记返修也须明确记录当前状态。详见[返修状态契约](references/repair-state-contract.md)。
+
+裁切、放大及按帧重剪用`python scripts/local_transform.py PROJECT --plan TRANSFORM.json`，必须在冻结返修计划许可范围内实际执行，保留父素材、命令、帧映射及声音匹配结果；先登记pending，新章重审后close。详见[本地变换契约](references/local-transform-contract.md)。
+
+正式导出先到technical_verified，完整交付包通过后才ready。运行`python scripts/delivery_package.py PROJECT --output-name final_mv.mp4`，缺最终动态复核时只建立pending模板并阻断；实际完成有声复核后再执行，生成双版本、权威LRC、实际对齐执行证据与ZIP。详见[交付包契约](references/delivery-package-contract.md)。不会自动认证嘴型或用户已接收。
+
+交付包还强制[离线费用核验](references/production-cost-contract.md)，未知费用不填零。仅从未派发的准备可用`submission_jobs.py cancel-prepared PROJECT --job-id JOB`释放本地预占；不查询后端，不是取消供应商任务或退款。
+
+正式生产另要求关1/5/6、八部门和制作桌的实际进程回执，直接手写gates报告或只运行只读audit不算执行。通过固定入口运行：
+
+```bash
+python scripts/workflow_execution.py run PROJECT --step gate1
+python scripts/workflow_execution.py run PROJECT --step gate5
+python scripts/workflow_execution.py run PROJECT --step crew_pipeline
+python scripts/workflow_execution.py run PROJECT --step crew_rehearsal
+python scripts/workflow_execution.py run PROJECT --step gate6
+python scripts/workflow_execution.py check PROJECT
+```
+
+以上顺序在设计和提示词当前版本编译完成后执行：关5可能更新分镜提示词指纹，随后重跑八部门和制作桌才能绑定当前分镜。失败重跑使旧成功记录失效，旧记录归档；运行日志、报告、输入及脚本版本均须一致。关1默认要求实际ASR来源和逐行复核，临时时间失败；结构试跑须显式 `gate_checks.py gate1 PROJECT --diagnostic`，不能作为正式回执。回执不认证实际听看；拥有文件写权限者仍可伪造文件，不把本地哈希当外部可信签名。
+
+实际本地ASR及时间轴草稿入口：
+
+```bash
+python scripts/asr_capture.py PROJECT --audio ORIGINAL_AUDIO --lyrics OFFICIAL_LYRICS --model-path LOCAL_MODEL_DIR
+python scripts/timing_draft.py PROJECT
+```
+
+ASR原始结果、模型指纹和官方歌词匹配候选分别保存；草稿全部待核，不自动补缺句、判间奏或批准句界。`timing_evidence.py`要求原曲/歌词/ASR/逐行复核绑定同一版本；复核者声明不等于自动证实其实际听过。
+
+退出0仅代表本阶段当前机检通过，不能声明十二步历史执行、艺术质量或交付接收通过。外部调度器仍须调用提交契约、记录真实回执和成本；直接MCP调用不受本地Python自动拦截。
 
 ## 快速开始
 
@@ -28,14 +74,15 @@ python scripts/film_grammar_corpus.py audit <project_dir> <profile.json>
 python scripts/prompt_build.py <project_dir>
 
 # 4. 硬门禁机检（关1/关5/关6，同时写 gates/*.json + gates/*.html）
-python scripts/gate_checks.py gate5 <project_dir>
-python scripts/gate_checks.py gate6 <project_dir>
+python scripts/workflow_execution.py run <project_dir> --step gate5
+python scripts/workflow_execution.py run <project_dir> --step gate6
 
 # 5. 多场景关键帧预览成片（优先 input/scene_*.png；无场景图才回退人物参考图）
 # 用户未选择视频后端时，正式流程在这里停止。
 python scripts/render_preview.py <project_dir>
 
-# 用户所选静帧后端产出图片后，实际审查并用 visual_assets.py 登记母版/关键帧。
+# 图片先register为pending，实际观察后以当前图片SHA、审查者和证据执行approve-static。
+# 母版先获有效静帧批准，才可登记依赖它的关键帧；登记不等于批准。
 # visual_revision.py 用于 Remix 单变量比较与局部修复契约检查，详见执行契约。
 
 # 6. 用户选定视频后端并核验真实契约后，显式传入该后端的时长上限
@@ -97,6 +144,8 @@ python -m unittest discover -s tests -v
 | 脚本 | 职责 |
 |---|---|
 | gate_checks.py | 关1/关5/关6机检，检查数由报告给出；关1区分结构通过与production |
+| workflow_audit.py | 只读汇总十二步与生成前/批量前/交付前当前检查，复用关5和审批校验，不补历史批准 |
+| production_preflight.py | 正式提交、选段渲染及最终合成共用实时关1/5/6、导演序列、剧组报告及关键帧检查 |
 | timeline_fallback.py | 无 ASR key 降级对齐 |
 | storyboard_build.py | 音乐引用驱动的视觉分镜；无方案只输出时间骨架，不猜副歌或轮换景别 |
 | prompt_build.py | 从 ZY Scene Master / Continuity Bible 编译提示词；缺少故事方案时阻断 |
@@ -137,3 +186,5 @@ Python 3.10+（纯标准库）、ffmpeg/ffprobe。**视频生成后端由用户�
 ## License
 
 本仓库自有代码按 MIT 使用。`vendor/zy-cinematic-realism/` 为 ZY / popopo-99 的第三方作品，采用 **CC BY-NC 4.0**，包含非商业限制；再分发和使用时须保留署名、来源与许可证。详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+统一运行五项实际门禁：`python scripts/workflow_execution.py run-required PROJECT`。固定依赖顺序为 gate1 → gate5 → crew_pipeline → crew_rehearsal → gate6，首个失败即停止并列明未执行项；成功后还会重验全部当前回执。该命令不调用生成视频后端，不代表十二步全部完成，也不批准人工审片。

@@ -126,8 +126,19 @@ def check_timeline(tl: dict, lyrics_text: str, audio_duration: float = None) -> 
     interludes = [ln for ln in tl.get("lines", []) if ln["type"] == "interlude"]
 
     # ① 行数与官方歌词一致（非空行）
-    official_lines = [ln.strip() for ln in lyrics_text.splitlines() if ln.strip()]
-    if official_lines:
+    try:
+        try:
+            from .lyrics_canonical import parse
+        except ImportError:
+            from lyrics_canonical import parse
+        official_rows = parse(lyrics_text) if lyrics_text.strip() else []
+        official_lines = [row['text'] for row in official_rows]
+        lyrics_parse_error = False
+    except ValueError:
+        official_lines, official_rows, lyrics_parse_error = [], [], True
+    if lyrics_parse_error:
+        lyrics_ok = False
+    elif official_lines:
         import unicodedata
         normalize = lambda value: "".join(unicodedata.normalize("NFKC", str(value)).split())
         lyrics_ok = [normalize(line.get("text", "")) for line in vocal] == [normalize(line) for line in official_lines]
@@ -135,6 +146,10 @@ def check_timeline(tl: dict, lyrics_text: str, audio_duration: float = None) -> 
         lyrics_ok = tl.get("lyrics_source") == "asr_only" and bool(vocal)
     add("歌词一行不能少", lyrics_ok,
         f"timeline={len(vocal)} official={len(official_lines)} source={tl.get('lyrics_source')}")
+    if any(row.get('speaker') for row in official_rows):
+        add('演唱者与官方角色标签一致', len(vocal) == len(official_rows) and all(
+            not row.get('speaker') or row['speaker'] == line.get('speaker')
+            for row, line in zip(official_rows, vocal)), '角色标签仅作元数据，不能改变谁在演唱')
     import math
     ids = [line.get("index") for line in tl.get("lines", [])]
     valid = all(type(i) is int and i > 0 for i in ids) and len(ids) == len(set(ids))
@@ -498,8 +513,88 @@ def resolve_source_audio(proj: Path, timeline: dict):
     return candidates[0] if len(candidates) == 1 else None
 
 
+def audit_prompts(proj: Path, timeline: dict, style: dict) -> tuple[dict, bool]:
+    """复用关5实时检查；不写指纹或批准，供CLI和项目审计共同调用。"""
+    has_protagonist = any((proj / "input").glob("protagonist.*"))
+    report = {"gate": 5, "checks": [], "shots": []}
+    all_ok = True
+    storyboard_path = proj / "state" / "storyboard.json"
+    storyboard = load(storyboard_path) if storyboard_path.exists() else {"shots": []}
+    try:
+        from .pipeline_contracts import unique_ids
+    except ImportError:
+        from pipeline_contracts import unique_ids
+    unique = unique_ids(storyboard.get("shots", []))
+    report["checks"].append({"item": "分镜ID唯一非空", "pass": unique})
+    all_ok &= unique
+    shot_map = {s.get("id"): s for s in storyboard.get("shots", [])}
+    prompt_ids = []
+    file_ids = []
+    for pf in sorted((proj / "prompts").glob("SH*.json")):
+        prompt = load(pf)
+        prompt_id = prompt.get("meta", {}).get("shot_id")
+        prompt_ids.append(prompt_id)
+        expected_id = pf.stem
+        file_ids.append(expected_id)
+        shot = shot_map.get(prompt_id)
+        checks = check_prompt(prompt, timeline, style, has_protagonist, shot)
+        if storyboard.get('story_mode') == 'zy_story_visual_development':
+            try:
+                from .crew_execution import validate_motion_package
+                from .pipeline_contracts import digest
+            except ImportError:
+                from crew_execution import validate_motion_package
+                from pipeline_contracts import digest
+            try:
+                motion_errors = validate_motion_package(prompt, load(proj/'prompts/motion'/pf.name), digest(pf))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                motion_errors = [f'运动包无法核验: {exc}']
+            checks.append({'item': '视频运动包完整保留剧组和导演事实', 'pass': not motion_errors,
+                           'evidence': '; '.join(motion_errors)})
+        if shot is not None:
+            checks.append({"shot_id": prompt_id, "idx": 21, "item": "当前镜头设计指纹一致",
+                           "pass": prompt.get("meta", {}).get("shot_design_fingerprint") == shot_fingerprint(shot),
+                           "evidence": "镜头设计变更后必须重新编译"})
+        report["shots"].append({"file": pf.name, "checks": checks,
+                                "fingerprint": sha256_file(pf)})
+        all_ok &= all(c["pass"] for c in checks)
+    coverage_ok = (bool(shot_map) and len(prompt_ids) == len(set(prompt_ids)) and
+                   set(prompt_ids) == set(shot_map) and prompt_ids == file_ids)
+    report["checks"].append({"item": "提示词完整覆盖分镜且文件名一致", "pass": coverage_ok,
+                             "evidence": f"prompts={len(prompt_ids)} shots={len(shot_map)} "
+                                         f"filenames_match={prompt_ids == file_ids}"})
+    all_ok &= coverage_ok
+    try:
+        development = load(proj / "state" / "development.json")
+        dev_errors = validate_development(development, storyboard, style, proj)
+    except (OSError, ValueError) as exc:
+        dev_errors = [str(exc)]
+    report["checks"].append({"item": "ZY视觉开发来源与连续性契约", "pass": not dev_errors,
+                              "evidence": "; ".join(dev_errors)})
+    all_ok &= not dev_errors
+    dependencies = {
+        "story_plan_fingerprint": proj / "state" / "story_plan.json",
+        "timeline_fingerprint": proj / "state" / "timeline.json",
+        "visual_edit_fingerprint": proj / "state" / "visual_edit_plan.json",
+    }
+    dependency_ok = all(path.is_file() and storyboard.get(key) == "sha256:" + sha256_file(path)
+                        for key, path in dependencies.items())
+    if (proj / "state" / "music_structure.json").is_file():
+        dependency_ok &= storyboard.get("music_structure_fingerprint") == "sha256:" + sha256_file(proj / "state" / "music_structure.json")
+    dev_path = proj / "state" / "development.json"
+    if dev_path.is_file():
+        expected_dev = "sha256:" + sha256_file(dev_path)
+        dependency_ok &= all(load(proj / "prompts" / s["file"]).get("meta", {}).get(
+            "development_fingerprint") == expected_dev for s in report["shots"])
+    report["checks"].append({"item": "制作包依赖指纹仍有效", "pass": bool(dependency_ok),
+                              "evidence": "修改上游后必须重新编译"})
+    all_ok &= dependency_ok
+    return report, bool(all_ok)
+
+
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in ("gate1", "gate5", "gate6"):
+    diagnostic = len(sys.argv) == 4 and sys.argv[1] == 'gate1' and sys.argv[3] == '--diagnostic'
+    if (len(sys.argv) != 3 and not diagnostic) or sys.argv[1] not in ("gate1", "gate5", "gate6"):
         print(__doc__)
         sys.exit(2)
     proj = Path(sys.argv[2])
@@ -511,7 +606,6 @@ def main():
     timeline = load(proj / "state" / "timeline.json")
     # BUG-06 修法：style.json 在关2才产出，关1不得依赖它
     style = load(proj / "state" / "style.json") if (proj / "state" / "style.json").exists() else {}
-    has_protagonist = any((proj / "input").glob("protagonist.*"))
 
     if sys.argv[1] == "gate1":
         lyrics = (proj / "input" / "lyrics.txt").read_text(encoding="utf-8") \
@@ -526,9 +620,21 @@ def main():
             from pipeline_contracts import timing_authority
         report["timing_authority"] = timing_authority(timeline)
         report["structural_pass"] = all(c["pass"] for c in checks)
-        report["production_allowed"] = report["structural_pass"] and report["timing_authority"] == "production"
+        try:
+            from .timing_evidence import errors as timing_source_errors
+        except ImportError:
+            from timing_evidence import errors as timing_source_errors
+        report['timing_source_errors'] = timing_source_errors(proj, timeline)
+        report["production_allowed"] = (report["structural_pass"] and report["timing_authority"] == "production"
+                                        and not report['timing_source_errors'])
         report["stage"] = "production" if report["production_allowed"] else "provisional" if report["structural_pass"] else "structural_failed"
-        all_ok = all(c["pass"] for c in checks)
+        report['diagnostic_only'] = diagnostic
+        if not diagnostic:
+            checks.extend([
+                {'item': '正式时间权威已批准', 'pass': report['timing_authority'] == 'production', 'evidence': report['timing_authority']},
+                {'item': '实际ASR来源及逐行复核有效', 'pass': not report['timing_source_errors'],
+                 'evidence': '; '.join(report['timing_source_errors'])}])
+        all_ok = report['structural_pass'] if diagnostic else report['production_allowed']
         n_pass, n_total = sum(1 for c in checks if c["pass"]), len(checks)
         report["summary"] = {"pass": all_ok, "passed": n_pass, "total": n_total}
         write_gate_artifacts(proj, report)
@@ -536,79 +642,7 @@ def main():
         sys.exit(0 if all_ok else 1)
 
     if sys.argv[1] == "gate5":
-        report = {"gate": 5, "checks": [], "shots": []}
-        all_ok = True
-        storyboard_path = proj / "state" / "storyboard.json"
-        storyboard = load(storyboard_path) if storyboard_path.exists() else {"shots": []}
-        try:
-            from .pipeline_contracts import unique_ids
-        except ImportError:
-            from pipeline_contracts import unique_ids
-        unique = unique_ids(storyboard.get("shots", []))
-        report["checks"].append({"item": "分镜ID唯一非空", "pass": unique})
-        all_ok &= unique
-        shot_map = {s.get("id"): s for s in storyboard.get("shots", [])}
-        prompt_ids = []
-        file_ids = []
-        for pf in sorted((proj / "prompts").glob("SH*.json")):
-            prompt = load(pf)
-            prompt_id = prompt.get("meta", {}).get("shot_id")
-            prompt_ids.append(prompt_id)
-            expected_id = pf.stem
-            file_ids.append(expected_id)
-            shot = shot_map.get(prompt_id)
-            checks = check_prompt(prompt, timeline, style, has_protagonist, shot)
-            if storyboard.get('story_mode') == 'zy_story_visual_development':
-                try:
-                    from .crew_execution import validate_motion_package
-                    from .pipeline_contracts import digest
-                except ImportError:
-                    from crew_execution import validate_motion_package
-                    from pipeline_contracts import digest
-                try:
-                    motion_errors = validate_motion_package(prompt, load(proj/'prompts/motion'/pf.name), digest(pf))
-                except (OSError, ValueError, KeyError, TypeError) as exc:
-                    motion_errors = [f'运动包无法核验: {exc}']
-                checks.append({'item': '视频运动包完整保留剧组和导演事实', 'pass': not motion_errors,
-                               'evidence': '; '.join(motion_errors)})
-            if shot is not None:
-                checks.append({"shot_id": prompt_id, "idx": 21, "item": "当前镜头设计指纹一致",
-                               "pass": prompt.get("meta", {}).get("shot_design_fingerprint") == shot_fingerprint(shot),
-                               "evidence": "镜头设计变更后必须重新编译"})
-            report["shots"].append({"file": pf.name, "checks": checks,
-                                    "fingerprint": sha256_file(pf)})
-            all_ok &= all(c["pass"] for c in checks)
-        coverage_ok = (bool(shot_map) and len(prompt_ids) == len(set(prompt_ids)) and
-                       set(prompt_ids) == set(shot_map) and prompt_ids == file_ids)
-        report["checks"].append({"item": "提示词完整覆盖分镜且文件名一致", "pass": coverage_ok,
-                                 "evidence": f"prompts={len(prompt_ids)} shots={len(shot_map)} "
-                                             f"filenames_match={prompt_ids == file_ids}"})
-        all_ok &= coverage_ok
-        try:
-            development = load(proj / "state" / "development.json")
-            dev_errors = validate_development(development, storyboard, style, proj)
-        except (OSError, ValueError) as exc:
-            dev_errors = [str(exc)]
-        report["checks"].append({"item": "ZY视觉开发来源与连续性契约", "pass": not dev_errors,
-                                  "evidence": "; ".join(dev_errors)})
-        all_ok &= not dev_errors
-        dependencies = {
-            "story_plan_fingerprint": proj / "state" / "story_plan.json",
-            "timeline_fingerprint": proj / "state" / "timeline.json",
-            "visual_edit_fingerprint": proj / "state" / "visual_edit_plan.json",
-        }
-        dependency_ok = all(path.is_file() and storyboard.get(key) == "sha256:" + sha256_file(path)
-                            for key, path in dependencies.items())
-        if (proj / "state" / "music_structure.json").is_file():
-            dependency_ok &= storyboard.get("music_structure_fingerprint") == "sha256:" + sha256_file(proj / "state" / "music_structure.json")
-        dev_path = proj / "state" / "development.json"
-        if dev_path.is_file():
-            expected_dev = "sha256:" + sha256_file(dev_path)
-            dependency_ok &= all(load(proj / "prompts" / s["file"]).get("meta", {}).get(
-                "development_fingerprint") == expected_dev for s in report["shots"])
-        report["checks"].append({"item": "制作包依赖指纹仍有效", "pass": bool(dependency_ok),
-                                  "evidence": "修改上游后必须重新编译"})
-        all_ok &= dependency_ok
+        report, all_ok = audit_prompts(proj, timeline, style)
     else:
         sb = load(proj / "state" / "storyboard.json")
         checks = check_storyboard(sb, timeline)

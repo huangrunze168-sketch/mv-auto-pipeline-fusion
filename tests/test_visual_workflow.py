@@ -10,7 +10,7 @@ from pathlib import Path
 
 from scripts.storyboard_build import build, build_visual_shots, REQUIRED_STORY_FIELDS
 from scripts.visual_development import validate, fingerprint, VENDOR
-from scripts.visual_assets import register, require_keyframe
+from scripts.visual_assets import register as register_pending, approve_static, require_keyframe
 from scripts.prompt_build import compile_director_method
 from scripts.chapter_prompt_build import build as build_chapters
 from scripts.edit_assemble import compile_selection
@@ -28,6 +28,13 @@ PNG_BYTES = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def register(*args, **kwargs):
+    """隔离测试显式静帧审批；不是把真实登记自动当成观察。"""
+    value = register_pending(*args, **kwargs)
+    return approve_static(args[0], args[1], observed_sha256=value['sha256'],
+                          observer='isolated-test-fixture', evidence=args[5])
 
 
 def crew_bible_fixture():
@@ -196,13 +203,13 @@ def write_sequence_stub(project, shots=None):
 
 
 def write_grammar_profile(project, *, profile_id="drama-fixture"):
-    """最小 production_reference 画像，供 enforce_envelope 生产路径。"""
+    """建议性画像夹具；不能模拟可信生产认证。"""
     project = Path(project)
     path = project / "state/reference_profiles" / f"{profile_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     profile = {
         "schema_version": 1, "profile_id": profile_id,
-        "status": "production_reference",
+        "status": "exploratory_only",
         "scene_mean_duration_sec": {"p10": 0.5, "p90": 8.0},
         "scene_kind_envelopes": {
             "narrative": {"p10": 0.5, "p90": 8.0},
@@ -216,7 +223,7 @@ def write_grammar_profile(project, *, profile_id="drama-fixture"):
         "profile_path": f"state/reference_profiles/{profile_id}.json",
         "profile_sha256": fingerprint(path),
         "profile_id": profile_id,
-        "mode": "enforce_envelope",
+        "mode": "advisory",
         "rationale": "测试夹具语料", "use_scope": ["editing"],
     }
 
@@ -718,12 +725,12 @@ class VisualWorkflowTests(unittest.TestCase):
                 "mode": "advisory", "rationale": "匹配剧情类 MV", "use_scope": ["editing"],
             }}
             denied = audit_binding(development, {"shots": shots}, project)
-            self.assertTrue(any("enforce_envelope" in e for e in denied["errors"]), denied)
+            self.assertFalse(denied["errors"], denied)
             development["grammar_reference"]["mode"] = "enforce_envelope"
             blocked = audit_binding(development, {"shots": shots}, project)
             self.assertTrue(any("样本影片数不足" in e for e in blocked["errors"]), blocked)
             missing = audit_binding({}, {"shots": shots}, project)
-            self.assertTrue(any("缺 corpus" in e for e in missing["errors"]), missing)
+            self.assertIsNone(missing)
             profile_path.write_text("{}", encoding="utf-8")
             changed = audit_binding(development, {"shots": shots}, project)
             self.assertTrue(any("指纹" in error for error in changed["errors"]))

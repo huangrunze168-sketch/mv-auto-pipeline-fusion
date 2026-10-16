@@ -2,12 +2,18 @@
 import argparse
 import hashlib
 import json
+import copy
 from pathlib import Path
 
 try:
     from .visual_development import fingerprint, load
 except ImportError:
     from visual_development import fingerprint, load
+
+try:
+    from .pipeline_contracts import atomic_batch, digest, require_no_transaction
+except ImportError:
+    from pipeline_contracts import atomic_batch, digest, require_no_transaction
 
 
 def dependency_snapshot(project: Path) -> dict:
@@ -43,6 +49,10 @@ def asset_errors(project: Path, asset: dict, assets: dict) -> list:
         errors.append("资产不存在或内容指纹已改变")
     if asset.get("status") != "approved" or not asset.get("review_evidence"):
         errors.append("资产未经过实际观察批准")
+    review = asset.get("static_review") or {}
+    if (review.get("media_sha256") != asset.get("sha256") or not review.get("observer")
+            or not review.get("evidence")):
+        errors.append("缺少绑定当前图片的独立静帧审查记录")
     for name, expected in asset.get("dependencies", {}).items():
         dep = project / name
         if not dep.is_file() or fingerprint(dep) != expected:
@@ -79,6 +89,13 @@ def require_keyframe(project: Path, shot: dict, registry: dict) -> dict:
 
 def register(project: Path, aid: str, kind: str, scene_id: str, path: Path,
              evidence: str, parent_id: str | None = None) -> dict:
+    project, path = Path(project).resolve(), Path(path).resolve()
+    require_no_transaction(project)
+    registry_path = project/'state/visual_assets.json'
+    inputs = [project/'state'/name for name in ('development.json', 'storyboard.json',
+                                               'style.json', 'timeline.json', 'music_structure.json')]
+    inputs += [path, registry_path]
+    expected = {p: digest(p) if p.is_file() else None for p in inputs}
     if not evidence.strip() or not path.is_file():
         raise ValueError("登记批准资产必须提供实际审查证据与存在的文件")
     import subprocess
@@ -101,7 +118,8 @@ def register(project: Path, aid: str, kind: str, scene_id: str, path: Path,
     registry_path = project / "state" / "visual_assets.json"
     registry = load(registry_path) if registry_path.is_file() else {"assets": {}}
     record = {"kind": kind, "scene_id": scene_id, "path": str(path.resolve()),
-              "sha256": fingerprint(path), "status": "approved", "review_evidence": evidence,
+              "sha256": fingerprint(path), "status": "pending", "review_evidence": "",
+              "registration_note": evidence,
               "review_scope": "declared_static_structure", "agent_inspected": False,
               "inspection_source": "caller_declared_evidence", "media_probe": streams[0],
               "user_accepted": False, "dynamic_verified": False,
@@ -121,13 +139,42 @@ def register(project: Path, aid: str, kind: str, scene_id: str, path: Path,
             raise ValueError("母版需复核: " + "; ".join(errors))
         record.update(parent_asset=parent_id, parent_sha256=parent["sha256"], shot_id=aid)
     registry["assets"][aid] = record
-    registry_path.write_text(json.dumps(registry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_batch({registry_path: json.dumps(registry, ensure_ascii=False, indent=2)+'\n'}, expected=expected)
+    return record
+
+
+def approve_static(project, aid, *, observed_sha256, observer, evidence):
+    """显式记录审查者声明；登记和解码检查绝不自动批准，也不认证实际看图。"""
+    project = Path(project).resolve()
+    require_no_transaction(project)
+    path = project/'state/visual_assets.json'
+    version = digest(path)
+    expected = {project/'state'/name: digest(project/'state'/name)
+                for name in ('development.json', 'storyboard.json')}
+    registry = load(path)
+    record = copy.deepcopy(registry['assets'][aid])
+    if (not isinstance(observer, str) or not observer.strip()
+            or not isinstance(evidence, str) or not evidence.strip()):
+        raise ValueError('须有明确审查者和实际观察证据')
+    if observed_sha256 != record['sha256'] or digest(project/record['path']) != observed_sha256:
+        raise ValueError('实际观察的图片版本不匹配，不能批准替换后的图片')
+    record.update(status='approved', review_evidence=evidence,
+                  static_review={'media_sha256': observed_sha256, 'observer': observer,
+                                 'evidence': evidence, 'scope': 'reviewer_attested_static_only'})
+    errors = asset_errors(project, record, registry['assets'])
+    if errors:
+        raise ValueError('静帧批准依据失效: ' + '; '.join(errors))
+    registry['assets'][aid] = record
+    expected.update({path: version, project/record['path']: observed_sha256})
+    for name, value in record['dependencies'].items():
+        expected[project/name] = value
+    atomic_batch({path: json.dumps(registry, ensure_ascii=False, indent=2)+'\n'}, expected=expected)
     return record
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("register", "check"))
+    parser.add_argument("action", choices=("register", "approve-static", "check"))
     parser.add_argument("project_dir")
     parser.add_argument("--id")
     parser.add_argument("--kind", choices=("scene_master", "keyframe"))
@@ -135,6 +182,8 @@ if __name__ == "__main__":
     parser.add_argument("--path")
     parser.add_argument("--evidence")
     parser.add_argument("--parent")
+    parser.add_argument("--observed-sha256")
+    parser.add_argument("--observer")
     args = parser.parse_args()
     project = Path(args.project_dir).resolve()
     if args.action == "register":
@@ -142,6 +191,11 @@ if __name__ == "__main__":
             parser.error("register 需要 --id --kind --scene --path --evidence")
         result = register(project, args.id, args.kind, args.scene, Path(args.path), args.evidence, args.parent)
         print(json.dumps(result, ensure_ascii=False))
+    elif args.action == "approve-static":
+        if not all((args.id, args.observed_sha256, args.observer, args.evidence)):
+            parser.error("approve-static需要 --id --observed-sha256 --observer --evidence")
+        print(json.dumps(approve_static(project, args.id, observed_sha256=args.observed_sha256,
+                                       observer=args.observer, evidence=args.evidence), ensure_ascii=False))
     else:
         registry = load(project / "state" / "visual_assets.json")
         errors = {key: asset_errors(project, value, registry["assets"])

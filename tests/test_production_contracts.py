@@ -22,7 +22,7 @@ from scripts.omni_reference import validate_omni_reference_blueprint
 from scripts.submission_contract import validate_submission_contract
 from scripts.director_review_gate import (dependency_snapshot, initial_review, approved,
                                          delivery_approved, DIMENSIONS, SEQUENCE_DIMENSIONS, review_plan)
-from scripts.visual_assets import register
+from test_visual_workflow import register
 from scripts.duration_fit import fit
 from scripts.audio_master import resolve_master
 from scripts.media_verify import verify_delivery, probe
@@ -62,14 +62,38 @@ class ProductionContracts(unittest.TestCase):
         self.timeline, _, _, self.dev, self.style = fixture(self.project)
         self.sb = build(self.project)
 
+    def generated_origin(self, source, contract_path=None):
+        """真实本地媒体与完整提交链；供应商响应/HTTP为明确测试夹具。"""
+        from scripts import submission_jobs, media_origin
+        job = submission_jobs.prepare(self.project, contract_path or self.project / 'state/job_contract.json')
+        raw = {'id': 'isolated-provider-fixture-' + job['job_id'], 'state': 'completed', 'url': 'https://fixture.invalid/video.mp4'}
+        submission_jobs.dispatch(self.project, job['job_id'], lambda payload: {
+            'task_id': raw['id'], 'status': raw['state'], 'raw_response': raw,
+            'response_fields': {'task_id': '/id', 'status': '/state'}})
+        submission_jobs.settle(self.project, job['job_id'], cash_cny='1', coins='0',
+            raw_cost_response={'id': raw['id'], 'cash': '1', 'coins': '0', 'scope': 'isolated_cost_fixture'},
+            cash_pointer='/cash', coins_pointer='/coins', task_pointer='/id')
+        http = self.project / 'state' / f"test-download-http-{job['job_id']}.json"
+        write(http, {'method': 'GET', 'status_code': 200, 'url': raw['url'],
+                     'downloaded_path': str(source), 'downloaded_sha256': digest(source), 'scope': 'test-fixture'})
+        receipt = media_origin.register_download(self.project, job['job_id'], downloaded_path=source,
+                                                http_evidence_path=http, output_pointer='/url')
+        return str(receipt.relative_to(self.project))
+
     def ready(self, max_duration=4):
         p = self.project
+        write(p / 'state/execution_policy.json', {'project_id': str(p.resolve()), 'video_backend_access': True,
+                                               'instruction': '仅为本地隔离测试模拟授权；不调用任何实际后端'})
         (p / 'input').mkdir()
         ffmpeg('-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=4',
                '-ac', '2', p / 'input/song.wav')
         self.timeline['master_audio'] = 'input/song.wav'
         self.timeline['master_audio_sha256'] = digest(p / 'input/song.wav')
+        self.timeline.update(no_interlude=True, asr_engine='synthetic_fixture_only')
+        (p/'input/lyrics.txt').write_text('\n'.join(line['text'] for line in self.timeline['lines']), encoding='utf8')
         write(p / 'state/timeline.json', self.timeline)
+        from evidence_fixtures import write_timing_fixture
+        write_timing_fixture(p, self.timeline)
         self.sb = build(p)
         (p / 'input/protagonist.png').write_bytes(PNG_BYTES)
         result = command('prompt_build.py', p)
@@ -122,20 +146,19 @@ class ProductionContracts(unittest.TestCase):
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         plan["source_storyboard_fingerprint"] = _digest(p / "state/storyboard.json")
         write(plan_path, plan)
-        (p / "gates").mkdir(parents=True, exist_ok=True)
-        fingerprints = {
-            "development": _digest(p / "state/development.json"),
-            "storyboard": _digest(p / "state/storyboard.json"),
-        }
-        write(p / "gates/crew_pipeline.json", {
-            "status": "structural_pass", "errors": [],
-            "source_fingerprints": fingerprints,
-        })
-        write(p / "gates/crew_rehearsal.json", {
-            "status": "design_ready_for_rehearsal",
-            "artistic_approval": False,
-        })
+        # 正常路径必须实际运行门禁，不能手写成功执行回执。
+        from scripts.workflow_execution import execute
+        for step in ('gate1', 'gate5', 'crew_pipeline', 'crew_rehearsal', 'gate6'):
+            receipt = execute(p, step)
+            self.assertEqual(receipt['status'], 'succeeded', receipt.get('errors'))
+        # 关5登记分镜指纹后按实际当前分镜更新依赖，避免沿用旧版本。
+        self.sb = json.loads((p/'state/storyboard.json').read_text(encoding='utf8'))
+        plan = json.loads(plan_path.read_text(encoding='utf8'))
+        plan['source_storyboard_fingerprint'] = _digest(p/'state/storyboard.json')
+        write(plan_path, plan)
         self.approve_animatic()
+        from test_submission_jobs import job_contract_fixture
+        _, self.contract = job_contract_fixture(p, self.contract)
         return package
 
     def approve_animatic(self):
@@ -255,6 +278,46 @@ class ProductionContracts(unittest.TestCase):
         self.assertTrue(all(c['status'] == 'pending' and not c['evidence'] for c in pending['checks'].values()))
         self.assertTrue(list((self.project / 'state/review_history').glob('animatic-*.json')))
         self.assertFalse(animatic_approved(self.project)[0])
+
+    def test_submission_rechecks_gate1_without_trusting_old_gate_report(self):
+        self.ready()
+        (self.project/'input/lyrics.txt').write_text('被替换的歌词', encoding='utf8')
+        errors = validate_submission_contract(self.contract, self.project)
+        self.assertTrue(any('歌词一行不能少' in e for e in errors), errors)
+
+    def test_submission_job_preparation_uses_real_full_contract_and_actual_reservation(self):
+        self.ready()
+        from test_submission_jobs import job_contract_fixture, response
+        from scripts.submission_jobs import prepare, dispatch
+        path, contract = job_contract_fixture(self.project, self.contract)
+        job = prepare(self.project, path)
+        self.assertEqual(job['status'], 'prepared')
+        seen = []
+        def adapter(payload):
+            seen.append(payload)
+            return response()
+        result = dispatch(self.project, job['job_id'], adapter)
+        self.assertEqual(result['status'], 'pending')
+        self.assertEqual(seen, [contract['provider_request']])
+
+    def test_submission_rechecks_motion_package_without_trusting_old_gate5(self):
+        self.ready()
+        path = self.project/'prompts/motion/SH001.json'
+        motion = json.loads(path.read_text(encoding='utf8'))
+        del motion['crew']['lighting']
+        write(path, motion)
+        errors = validate_submission_contract(self.contract, self.project)
+        self.assertTrue(any('关5' in e and '运动包' in e for e in errors), errors)
+
+    def test_submission_rejects_stale_rehearsal_even_when_status_still_passes(self):
+        self.ready()
+        self.assertEqual(validate_submission_contract(self.contract, self.project), [])
+        path = self.project/'gates/crew_rehearsal.json'
+        report = json.loads(path.read_text(encoding='utf8'))
+        report['input_fingerprints'][str(self.project.resolve()/'state/sequence_ref.txt')] = 'sha256:stale'
+        write(path, report)
+        errors = validate_submission_contract(self.contract, self.project)
+        self.assertTrue(any('crew_rehearsal.json: 输入指纹过期' in e for e in errors), errors)
 
     def test_A07_A08_A09_A10_submission_positive_and_tampering(self):
         package = self.ready()
@@ -444,6 +507,7 @@ class ProductionContracts(unittest.TestCase):
         write(self.project / 'state/generated_clips.json', {'clips': {'C1': clip}})
         self.assertNotEqual(command('edit_assemble.py', self.project, '--render').returncode, 0)
         clip['shot_ids'] = ['SH001', 'SH002']
+        clip['origin_receipt_path'] = self.generated_origin(self.project / 'review.mp4')
         write(self.project / 'state/generated_clips.json', {'clips': {'C1': clip}})
         from scripts.edit_assemble import build as assemble
         before = digest(self.project / 'state/edit_assembly.json')
@@ -648,7 +712,7 @@ class ProductionContracts(unittest.TestCase):
             'status': 'reviewed', 'evidence': '单元测试合成素材，不是美学批准',
             'chapter_id': 'CH01', 'shot_ids': ['SH001', 'SH002'],
             'frame_count': 96, 'fps': 24, 'scene_id': 'gate', 'path': 'review.mp4',
-            'sha256': digest(clip)}}})
+            'sha256': digest(clip), 'origin_receipt_path': self.generated_origin(clip)}}})
         write(self.project / 'state/edit_selection.json', {'selections': [
             {'shot_id': f'SH00{index+1}', 'clip_id': 'C1', 'in_frame': index*48,
              'out_frame': (index+1)*48, 'edit_reason': '测试按音乐切点', 'state_check': '测试状态承接'}
@@ -679,7 +743,26 @@ class ProductionContracts(unittest.TestCase):
         rerender = command('edit_assemble.py', self.project, '--render')
         self.assertNotEqual(rerender.returncode, 0)
         self.assertEqual(frozen_hash, digest(self.project / 'state/edit_assembly.json'))
+        from scripts.repair_state import assess as assess_repairs
+        assess_repairs(self.project)
         result = command('stitch_chapters.py', self.project, '--width', 320, '--height', 180)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(check_delivery(self.project, 'final_mv.mp4')['status'], 'technical_verified')
+        from scripts.delivery_evidence import review_template
+        pending = command('delivery_package.py', self.project)
+        self.assertNotEqual(pending.returncode, 0)
+        final_review = review_template(self.project, 'final_mv.mp4')
+        final_review.update(observer='明确的单元测试观察夹具，不代表真实观看', watched_full_audio_video=True)
+        for row in final_review['shots']:
+            row.update(performance_status='pass', sound_action_status='pass', continuity_status='pass',
+                       observation='单元测试本地媒体复核夹具',
+                       mouth_status='pass' if row['lip_sync_required'] else 'not_applicable')
+            if row['lip_sync_required']:
+                a, b = row['window']['start'], row['window']['end']
+                row['mouth_samples'] = [{'time_sec': a, 'observation': '测试开口观察'},
+                                        {'time_sec': (a+b)/2, 'observation': '测试闭口观察'}]
+        write(self.project / 'state/final_media_review.final_mv.mp4.json', final_review)
+        result = command('delivery_package.py', self.project)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         report = json.loads((self.project / 'output/final_mv.verification.json').read_text(encoding='utf-8'))
         self.assertEqual(report['status'], 'pass')
@@ -689,6 +772,47 @@ class ProductionContracts(unittest.TestCase):
         self.assertEqual(final_state['status'], 'ready', final_state['errors'])
         self.assertFalse(final_state['user_received'])
         self.assertEqual(final_state['history'], ['rendering', 'exported', 'technical_verified', 'ready'])
+        package_info = final_state['delivery_package']
+        package_manifest = json.loads(Path(package_info['manifest_path']).read_text(encoding='utf8'))
+        ledger = self.project / 'state/ledger.jsonl'
+        ledger_bytes = ledger.read_bytes()
+        financial_rows = [json.loads(r) for r in ledger.read_text(encoding='utf8').splitlines()]
+        next(r for r in financial_rows if r['action'] == 'settle')['cash_cny'] = '0'
+        ledger.write_text('\n'.join(json.dumps(r) for r in financial_rows)+'\n', encoding='utf8')
+        self.assertFalse(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        ledger.write_bytes(ledger_bytes)
+        self.assertTrue(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        bundle = Path(package_manifest['archive_path'])
+        bundle_bytes = bundle.read_bytes()
+        bundle.write_bytes(bundle_bytes + b'tampered')
+        self.assertFalse(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        bundle.write_bytes(bundle_bytes)
+        self.assertTrue(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        lrc_file = Path(package_manifest['artifact_root']) / 'lyrics.lrc'
+        lrc_bytes = lrc_file.read_bytes()
+        lrc_file.write_bytes(b'[00:00.00]wrong lyrics')
+        self.assertFalse(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        lrc_file.write_bytes(lrc_bytes)
+        self.assertTrue(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        assessment_path = self.project / 'state/repair_assessment.json'
+        assessment_bytes = assessment_path.read_bytes()
+        assessment_path.unlink()
+        self.assertFalse(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        assessment_path.write_bytes(assessment_bytes)
+        self.assertTrue(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        origins = json.loads((self.project / 'state/generated_clips.json').read_text(encoding='utf8'))['clips']
+        origin_path = self.project / origins['C1']['origin_receipt_path']
+        origin_bytes = origin_path.read_bytes()
+        origin_path.unlink()
+        self.assertFalse(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        origin_path.write_bytes(origin_bytes)
+        self.assertTrue(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        receipt_path = self.project/'state/executions/gate1.json'
+        receipt_bytes = receipt_path.read_bytes()
+        receipt_path.unlink()
+        self.assertFalse(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
+        receipt_path.write_bytes(receipt_bytes)
+        self.assertTrue(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
         altered_chapter_review = copy.deepcopy(prototype_review)
         altered_chapter_review['note'] = '章节审批版本发生变化'
         write(self.project / 'state/reviews/CH01.json', altered_chapter_review)
@@ -705,6 +829,134 @@ class ProductionContracts(unittest.TestCase):
         write(self.project / 'state/reviews/full_sequence.json', sequence)
         clip.write_bytes(b'changed-video')
         self.assertFalse(delivery_approved(self.project)[0])
+
+    def test_repair_real_contract_new_task_and_chapter_reapproval(self):
+        from scripts import repair_state
+        from scripts.chapter_admission import require as admit
+        self.ready()
+        old_review = self.make_review()
+        old = {'status': 'reviewed', 'evidence': '测试素材', 'chapter_id': 'CH01',
+               'shot_ids': ['SH001', 'SH002'], 'frame_count': 96, 'fps': 24, 'scene_id': 'gate',
+               'path': 'review.mp4', 'sha256': digest(self.project / 'review.mp4'),
+               'origin_receipt_path': self.generated_origin(self.project / 'review.mp4')}
+        write(self.project / 'state/generated_clips.json', {'clips': {'OLD': old}})
+        write(self.project / 'state/reviews/CH01.json', old_review)
+        failure = copy.deepcopy(old_review)
+        failure.update(decision='reject', batch_generation_allowed=False)
+        failure['director_checks']['editing']['status'] = 'fail'
+        write(self.project / 'analysis/failed_review.json', failure)
+        plan = {'dominant_failures': [{'classification': 'actual_drift', 'dimension': 'editing',
+                                      'evidence': '测试时间码覆盖', 'cause': '测试模型未按正确切点执行'}],
+                'structural_failure': False, 'action': 'surgical_repair', 'change_only': ['剪辑切点'],
+                'preserve_exactly': ['身份与舞台'],
+                'same_prompt_retry_reason': '测试：已批准切点正确，生成未遵循，按冻结条件重试'}
+        write(self.project / 'analysis/repair_plan.json', plan)
+        opened = repair_state.open_repair(self.project, clip_id='OLD', plan_path='analysis/repair_plan.json',
+                                          failure_review_path='analysis/failed_review.json')
+        self.assertFalse(approved(self.project)[0])
+        with self.assertRaises(ValueError): repair_state.require_closed(self.project)
+        self.assertTrue(validate_submission_contract(self.contract, self.project))
+        contract = {**self.contract, 'repair_id': opened['repair_id'], 'repair_plan_sha256': opened['plan_sha256']}
+        contract_path = self.project / 'state/repair_contract.json'
+        write(contract_path, contract)
+        source = self.project / 'replacement.mp4'
+        ffmpeg('-f', 'lavfi', '-i', 'color=white:s=320x180:r=24:d=4',
+               '-i', self.project / 'input/song.wav', '-t', 4, '-c:v', 'libx264', '-c:a', 'alac', source)
+        new = {**old, 'path': source.name, 'sha256': digest(source),
+               'origin_receipt_path': self.generated_origin(source, contract_path)}
+        write(self.project / 'state/generated_clips.json', {'clips': {'OLD': old, 'NEW': new}})
+        reviewed = copy.deepcopy(old_review)
+        reviewed.update(reviewed_media=source.name, reviewed_media_sha256=digest(source),
+                        dependencies=dependency_snapshot(self.project, 'CH01'))
+        write(self.project / 'state/reviews/CH01.json', reviewed)
+        write(self.project / 'state/director_review.json', reviewed)
+        self.assertTrue(approved(self.project, 'CH01')[0], approved(self.project, 'CH01')[1])
+        result = repair_state.close(self.project, opened['repair_id'], replacement_clip_id='NEW')
+        self.assertEqual(result['status'], 'resolved')
+        selections = [{'shot_id': f'SH00{i+1}', 'clip_id': 'NEW', 'in_frame': i*48,
+                       'out_frame': (i+1)*48, 'edit_reason': '测试返修切点', 'state_check': '测试状态'} for i in range(2)]
+        admit(self.project, self.sb, {'OLD': old, 'NEW': new}, selections)
+        write(self.project / 'state/edit_selection.json', {'selections': selections})
+        rendered = command('edit_assemble.py', self.project, '--render')
+        self.assertEqual(rendered.returncode, 0, rendered.stdout + rendered.stderr)
+
+    def test_local_repair_actual_transform_reapproval_and_formal_selection(self):
+        from scripts import repair_state, local_transform
+        self.ready()
+        old_review = self.make_review()
+        original = self.project / 'review.mp4'
+        original_sha = digest(original)
+        old = {'status': 'reviewed', 'evidence': '明确的本地媒体测试夹具', 'chapter_id': 'CH01',
+               'shot_ids': ['SH001', 'SH002'], 'frame_count': 96, 'fps': 24, 'scene_id': 'gate',
+               'path': original.name, 'sha256': original_sha, 'origin_receipt_path': self.generated_origin(original)}
+        write(self.project / 'state/generated_clips.json', {'clips': {'OLD': old}})
+        write(self.project / 'state/reviews/CH01.json', old_review)
+        failure = copy.deepcopy(old_review)
+        failure.update(decision='reject', batch_generation_allowed=False)
+        failure['director_checks']['editing']['status'] = 'fail'
+        write(self.project / 'analysis/failed-local-review.json', failure)
+        plan = {'dominant_failures': [{'classification': 'actual_drift', 'dimension': 'editing',
+                                      'evidence': '测试时间码覆盖', 'cause': '测试需调整数码构图'}],
+                'structural_failure': False, 'action': 'surgical_repair', 'change_only': ['数码裁切构图'],
+                'preserve_exactly': ['原透视、动作时序与声音'], 'permitted_local_operations': ['crop', 'scale']}
+        write(self.project / 'analysis/local-repair-plan.json', plan)
+        opened = repair_state.open_repair(self.project, clip_id='OLD', plan_path='analysis/local-repair-plan.json',
+                                          failure_review_path='analysis/failed-local-review.json')
+        transform_plan = {'source_clip_id': 'OLD', 'replacement_clip_id': 'LOCAL',
+                          'repair_id': opened['repair_id'], 'repair_plan_sha256': opened['plan_sha256'],
+                          'frame_ranges': [{'start_frame': 0, 'end_frame': 96}],
+                          'crop': {'x': 0, 'y': 0, 'width': 256, 'height': 144},
+                          'output_width': 320, 'output_height': 180, 'scale_method': 'lanczos',
+                          'audio_policy': 'preserve_selected_source', 'reason': '测试裁切并如实标注放大'}
+        write(self.project / 'analysis/transform-plan.json', transform_plan)
+        clip = local_transform.run(self.project, 'analysis/transform-plan.json')
+        self.assertEqual(clip['status'], 'pending')
+        self.assertFalse(approved(self.project)[0])
+        source = self.project / clip['path']
+        reviewed = copy.deepcopy(old_review)
+        reviewed.update(reviewed_media=clip['path'], reviewed_media_sha256=digest(source),
+                        dependencies=dependency_snapshot(self.project, 'CH01'))
+        write(self.project / 'state/reviews/CH01.json', reviewed)
+        write(self.project / 'state/director_review.json', reviewed)
+        self.assertTrue(approved(self.project, 'CH01')[0], approved(self.project, 'CH01')[1])
+        repair_state.close(self.project, opened['repair_id'], replacement_clip_id='LOCAL')
+        current_clip = json.loads((self.project / 'state/generated_clips.json').read_text(encoding='utf8'))['clips']['LOCAL']
+        self.assertEqual(current_clip['status'], 'reviewed')
+        selections = [{'shot_id': f'SH00{i+1}', 'clip_id': 'LOCAL', 'in_frame': i*48, 'out_frame': (i+1)*48,
+                       'edit_reason': '测试修复后按音乐窗口选段', 'state_check': '测试原动作时序保留'} for i in range(2)]
+        write(self.project / 'state/edit_selection.json', {'selections': selections})
+        rendered = command('edit_assemble.py', self.project, '--render')
+        self.assertEqual(rendered.returncode, 0, rendered.stdout + rendered.stderr)
+        self.assertEqual(digest(original), original_sha)
+
+    def test_mcp_broker_rechecks_real_preflight_before_host_claim(self):
+        from scripts import mcp_broker as broker, submission_jobs as jobs
+        import mcp_fixtures
+        self.ready(max_duration=15)
+        path, contract = mcp_fixtures.contract(self.project, self.contract)
+        self.assertEqual(validate_submission_contract(contract, self.project), [])
+        job = jobs.prepare(self.project, path)
+        worker, box, cid = mcp_fixtures.start(lambda: broker.run_dispatch(self.project, job['job_id'], timeout_sec=30), self.project)
+        receipt = self.project / 'state/executions/crew_rehearsal.json'
+        old = receipt.read_bytes()
+        receipt.unlink()
+        with self.assertRaises(ValueError): broker.claim(self.project, cid)
+        self.assertEqual(broker.load(broker.root_for(self.project, cid)/'call.json')['status'], 'awaiting_mcp')
+        receipt.write_bytes(old)
+        claimed = broker.claim(self.project, cid)
+        self.assertEqual(claimed['arguments'], contract['provider_request'])
+        mcp_fixtures.send(self.project, claimed, mcp_fixtures.result(contract))
+        pending = mcp_fixtures.complete(worker, box)
+        self.assertEqual(pending['status'], 'pending')
+        worker, box, cid = mcp_fixtures.start(lambda: broker.run_poll(self.project, job['job_id'], timeout_sec=30), self.project)
+        claimed = broker.claim(self.project, cid)
+        mcp_fixtures.send(self.project, claimed, mcp_fixtures.result(contract, 'completed', ids=False))
+        completed = mcp_fixtures.complete(worker, box)
+        self.assertEqual(completed['status'], 'completed')
+        self.assertEqual(completed['provider_task_id'], pending['provider_task_id'])
+        self.assertEqual(completed['response']['task_binding_kind'], 'request_context')
+        self.assertFalse((self.project / 'state/generated_clips.json').exists())
+        self.assertFalse(check_delivery(self.project, 'final_mv.mp4')['ready_for_delivery'])
 
     def test_A34_documented_boundary_is_discoverable(self):
         self.assertTrue((ROOT / 'references/production-hardening.md').is_file())

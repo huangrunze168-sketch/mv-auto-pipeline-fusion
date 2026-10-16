@@ -9,7 +9,7 @@ description: >
 # MV-AUTO-PIPELINE-FUSION · 音乐 MV 协作工作流（V1.7.0）
 
 > 一句话需求：**给一首歌和一张图，出来一支完整的、口型对得上的音乐 MV。**
-> 技术基线：全 API（无需 GPU）· 运行形态：Agent Skill。
+> 运行形态：Agent Skill＋本地CLI。外部生成仅在用户明确允许且全部前置通过时调用；本任务当前禁止使用生成视频后端。
 > 流程修订：首次视频生成前须完成剪辑预演批准；样片依赖按公共锁＋本章限定；全片先正式选段渲染、候选预览、审片，再最终合成，批准后禁止重写剪辑清单。
 > V1.7.0：补齐A06–A36的审批、提交、严格时间轴、空间连续性、真实交付核验、事务与成本门禁。正式执行先读取 `references/production-hardening.md`；不自动批准、不调用默认后端。
 > V1.6.1：修复画像入口漏检、全片灯光依赖失效、圆周角差、提交时间窗与审片时间码范围五项门禁反例；旧资产需重新复核设计指纹。
@@ -22,6 +22,8 @@ description: >
 ## 参考驱动的序列重设计
 
 本次新版创作采用 `creative_workflow_revision=2`，先读 `references/sequence-direction-workflow.md`。
+用户提供对标并要求跟随其感觉时，拉片后必须执行 [对标氛围转译与提示词细化](references/benchmark-atmosphere.md)：先把实际观察到的空间、光色、群众与表演、摄影距离、声音和剪辑关系转译为本片依据，再设计场景和逐镜提示词。默认跟随对标的视听气质，不只保留题材后另起美术方案；ZY 导演方法不能覆盖对标的关键气质。提示词写满与本镜有关的可执行细节，不以空泛形容词或篇幅代替信息。
+贴身Rap Battle还须执行该文的专项摄影规则：特写/近中景/过肩正反打承载对抗，焦段、高低机位和有动机运动进入逐镜执行；群众覆盖既丰富又完整，保护实际演唱者与声画动作，不用远景、碎切或泛化“多机位”代替。
 禁止用循环角度、等分音乐时间或平均镜长生成创作决策。先提取有路径、SHA、原始区间的参考段落，明确标注阅读与实际观看的区别；逐镜写参考怎样改变观看对象、物理机位、人物路径、光源、美术与切点，再编译。
 `state/sequence_direction.json` 是序列交接，不替代 ZY Scene Master；正式分镜须保留同一份逐镜执行事实。提示词入口检查一致性，预演和审片绑定它及参考文件。机器通过不代表好看。
 先跑全曲带原始音乐的低成本预演，检查信息推进、空间关系、高潮与音乐。未经实际观看不得填写批准；预演通过以后才生成必要母版/关键帧和代表样片，失败返工对应段落，不批量扩图。
@@ -67,6 +69,26 @@ project/
 
 ## 十二步 · 分阶段门禁
 
+### 执行入口与跳步检查
+
+**用户明确不使用生成视频后端时，只进行本地分析、代码测试和既有素材处理，不调用describe/dispatch/poll等后端工具。**项目`state/execution_policy.json`默认缺失即关闭；当前真实项目已明确关闭。不得为跑通测试自行启用、改填授权或新建一个允许后端的真实项目绕过限制。离线测试的临时项目使用明确合成夹具，不调用实际后端。规则和MCP交接边界见[后端与MCP契约](references/mcp-handoff-contract.md)。
+
+外部执行者（包括直接调用 MCP 的 Agent）在首次视频提交、批量提交及交付前必须运行 `scripts/workflow_audit.py` 的对应阶段。首次/批量提交同时传入真实 `--submission` 契约，并继续执行 `submission_contract.py`；不能用项目外自写提示词、生成回执或临时合成脚本替代正式链路。检查失败先修上游，不能生成后补填批准。相关命令和限制见 [逐环节核验](references/workflow-run-checklist.md)。
+
+关1/5/6、八部门与制作桌必须通过 `workflow_execution.py run PROJECT --step gate1|gate5|crew_pipeline|crew_rehearsal|gate6` 实际运行并保存有效回执，按当前设计版本依次重跑；关5写回提示词指纹后，八部门/制作桌须绑定当前分镜。正式提交、选段和合成核验输入、报告、日志和代码版本；缺回执、失败、运行中或过期均阻断。关1默认只有真实ASR来源和逐行复核有效、production_allowed=true才退出0；结构试跑只能显式--diagnostic，不作为正式回执。执行器不自动认证实际听看、艺术或其余步骤完成。
+
+外部视频提交还必须绑定当前上传/托管内容回执及实际原生请求字段，按[提交作业契约](references/submission-job-contract.md)走prepare预占与dispatch；单独制作包pass不允许直接发生成请求。未知结果不重提，同任务回查，实际费用独立记账，不以预估费用报结清。当前本地机制不能拦截绕开仓库直接调用的MCP工具，不得声称已有外部全局强制。
+
+回片必须按[正式素材来源契约](references/media-origin-contract.md)绑定原已完成任务、实际下载与视频SHA，正式素材填写`origin_receipt_path`。用户明确允许保留的素材另登记原授权文本、来源和用途，不伪造新任务；两条路径均不替代逐章动态审片。正式选段、合成和交付状态读取都重新核验来源。
+
+返修必须按[返修状态契约](references/repair-state-contract.md)执行open → 绑定冻结计划的新任务或[实际本地变换](references/local-transform-contract.md) → 新章重审 → close。开放返修阻断正式选段，原批准自动撤销并留历史；不许只改提示词或剪辑文件后沿用旧批准。全片审片后、正式合成前必须执行`repair_state.py assess`；无登记返修也明确汇总，不补造历史。本地变换只支持明确裁切、缩放及按帧重剪，保留实际来源和声音证据，结果先pending；数码放大不冒充真实机位或新增细节。
+
+交付必须按[实际交付包契约](references/delivery-package-contract.md)执行：导出及技术验证只到technical_verified；对最终文件完成有声逐镜复核后，运行delivery_package生成双版本、权威LRC、实际成片对齐执行记录及ZIP，核验通过才promote到ready。没有原生音轨不能拿母带伪造内嵌音轨版；不能代填最终观看/口形观察。包和音频对齐仍保持lip_sync_verified=false，不认证真实观看或独立嘴型测量。
+
+交付包还须按[费用契约](references/production-cost-contract.md)核对登记任务的原费用字段与台账，包含cost_audit.json；完成/预占不能冒充实付，缺账不ready，不能补写原始费用响应。仅未派发预占可本地cancel-prepared，不借此取消未知供应商调用；当前禁用后端不影响本地释放或旧费用离线登记。
+
+审计只读当前状态，不自动批准、不证明历史顺序。缺少实际动态听看能力时，保留未验收项，停止后续付费批量步骤；已有素材只允许通过明确的技术预览路径输出。用户要求自动化不等于授权伪造观看。当前代码不能拦截绕过它直接发往供应商的 MCP 请求，执行者须遵守提交前检查。
+
 | 步 | 内容 | 关 | 硬门禁 |
 |---|---|---|---|
 | 1 | 歌词提取与强制对齐：ASR API 只给时间，文本用官方歌词校正 → timeline.json（权威时间基准诞生地） | 关 1 | |
@@ -103,7 +125,7 @@ project/
 - **ZY 开发契约**（`scripts/visual_development.py`）：检查 treatment、已读来源、事实/解释/提案、参考职责、视觉规律、实际导演文件指纹、逐镜激活轴与观察依据、连续性前后状态及动作起止。指定导演而无路由决策时阻断，未激活轴保留，不自动“增强”强度。
 - **AI 剧组契约**（`scripts/crew_pipeline.py`）：八部门分别写全片级 bible、场景级美术/灯光方案和逐镜执行值；检查 30 度规则、180 度轴线、人物入出画方向、地理建立、双向剪辑关系、重复机位、视觉变化、平均镜长、连续慢镜和开场钩子。`style_application_order=after_film_grammar` 是硬门禁，导演风格不能替代基本视听语言。
 - **电影语法参考库**（`scripts/film_grammar_corpus.py`）：使用标注做建议性统计，数量不等于合法来源和标注质量验收；当前画像保持exploratory_only，可信生产验收未实现，enforce_envelope始终阻断。双来源导入见 `references/dual-source-reference.md`，不得冒充高分电影生产画像。
-- **资产依赖**（`scripts/visual_assets.py`）：场景母版与关键帧分别登记，批准须带实际观察证据；关键帧引用同场景母版版本。母版/人物/上游记录改变后，受影响资产必须复核。登记工具记录审查，不替人看图。
+- **资产依赖**（`scripts/visual_assets.py`）：登记只产生pending；实际静帧审查后单独approve-static，绑定当前图片SHA、审查者和观察证据，不认证工具实际看图。关键帧引用同场景已审母版。母版/人物/上游记录改变后，受影响资产必须复核。旧approved字符串不足以准入，静帧声明不能代替动态审片。
 - **单轴比较与修复**（`scripts/visual_revision.py`）：Remix 检查一个主要变量及允许后果；修复计划必须提供主因、实际漂移证据、CHANGE ONLY / PRESERVE EXACTLY。工具不代替视觉判断，也不提交生成任务。
 - **素材剪辑**（`scripts/edit_assemble.py`）：从 generated_clips 与 edit_selection 按帧选取已审素材；生成片段长度不等于剪辑镜头长度。只在显式 --render 时本地裁切，校验长度/帧率/指纹，不自动变速；正式合成消费已完成剪辑产物。
 
@@ -165,3 +187,7 @@ project/
 - `references/film-grammar-corpus.md` — 数百部电影标注的合法接入、匿名画像与项目审计规范
 - `references/api-backends.md` — 全 API 依赖清单与成本模型
 - `vendor/zy-cinematic-realism/` — 造梦师 v2.5.0 原名上游组件（步骤 5 按需加载；CC BY-NC 4.0，作者 ZY / popopo-99，详见目录内 `LICENSE` / `NOTICE.md`）
+
+统一运行五项实际门禁：`python scripts/workflow_execution.py run-required PROJECT`。固定依赖顺序为 gate1 → gate5 → crew_pipeline → crew_rehearsal → gate6，首个失败即停止并列明未执行项；成功后还会重验全部当前回执。该命令不调用生成视频后端，不代表十二步全部完成，也不批准人工审片。
+
+正式审片入口对所有schema版本强制歌曲情绪匹配与剧组情绪拉片；v2仅可兼容读取，不可通过删除新字段或降级版本获得生产批准。

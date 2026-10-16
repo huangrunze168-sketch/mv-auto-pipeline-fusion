@@ -99,6 +99,12 @@ def main():
     except ImportError:
         from pipeline_contracts import require_no_transaction
     require_no_transaction(project)
+    if not args.allow_unreviewed_preview:
+        try:
+            from .production_preflight import require_current
+        except ImportError:
+            from production_preflight import require_current
+        require_current(project)
     width, height = resolve_canvas(project, args.width, args.height)
     try:
         from .director_review_gate import delivery_approved
@@ -155,9 +161,12 @@ def main():
                 from .chapter_admission import require as require_chapters
             except ImportError:
                 from chapter_admission import require as require_chapters
+            origin_versions = {}
             admitted = require_chapters(project, storyboard,
                 json.loads((project / 'state/generated_clips.json').read_text(encoding='utf-8'))['clips'],
-                json.loads((project / 'state/edit_selection.json').read_text(encoding='utf-8'))['selections'])
+                json.loads((project / 'state/edit_selection.json').read_text(encoding='utf-8'))['selections'], origin_versions)
+            if {str(path): sha for path, sha in origin_versions.items()} != assembly.get('origin_versions'):
+                raise ValueError('选段素材来源版本已改变，须重做准入和全片审片')
             if admitted != assembly.get('chapter_approvals'):
                 raise ValueError('正式选段使用的章节批准版本已改变，须重做准入和全片审片')
         if (assembly.get("status") != "rendered" or assembly.get("storyboard_sha256") !=

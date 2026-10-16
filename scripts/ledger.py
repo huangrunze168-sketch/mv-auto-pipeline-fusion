@@ -61,6 +61,7 @@ def record(path, entry, cash_limit):
     for field in ("cash_cny", "coins", "duration_sec"):
         entry[field] = str(money(entry[field]))
     amount, limit = money(entry["cash_cny"]), money(cash_limit)
+    coin_amount = money(entry['coins'])
     if limit < 0 or money(entry["duration_sec"]) < 0 or entry["action"] not in VALID_ACTIONS:
         raise ValueError("预算、时长或action无效")
     if (amount < 0 or money(entry["coins"]) < 0) and entry["action"] != "fail_refund":
@@ -78,7 +79,7 @@ def record(path, entry, cash_limit):
                     raise ValueError("幂等event_id与既有事件冲突")
                 return {"status": "idempotent", "entry": row}
         reservations, spent = {}, Decimal(0)
-        task_spent = {}
+        task_spent, task_coins = {}, {}
         for row in rows:
             tid, value = row.get("task_id"), money(row["cash_cny"])
             if row["action"] == "reserve":
@@ -89,29 +90,32 @@ def record(path, entry, cash_limit):
                 reservations.pop(tid, None)
                 spent += value
                 task_spent[tid] = task_spent.get(tid, Decimal(0)) + value
+                task_coins[tid] = task_coins.get(tid, Decimal(0)) + money(row['coins'])
         tid, action = entry["task_id"], entry["action"]
         if action == "reserve":
             if tid in reservations or tid in task_spent:
                 raise ValueError("任务已预占或结算；重试须使用新的task_id")
             reservations[tid] = amount
         elif action == "release":
-            if tid not in reservations or amount != 0:
+            if tid not in reservations or amount != 0 or coin_amount != 0:
                 raise ValueError("释放须关联现存预占且金额为0")
             reservations.pop(tid)
         elif action == "fail_refund":
             reference = entry.get("refund_of")
-            if reference != tid or amount >= 0 or task_spent.get(tid, Decimal(0)) + amount < 0:
+            if (reference != tid or amount > 0 or coin_amount > 0 or (amount == 0 and coin_amount == 0)
+                    or task_spent.get(tid, Decimal(0)) + amount < 0
+                    or task_coins.get(tid, Decimal(0)) + coin_amount < 0):
                 raise ValueError("退款必须关联已付款任务且不能超额")
             spent += amount
         else:
-            if amount > 0 and tid not in reservations:
+            if (amount > 0 or coin_amount > 0) and tid not in reservations:
                 raise ValueError("付费事件必须先reserve预算")
             reservations.pop(tid, None)
             spent += amount
         if spent + sum(reservations.values()) > limit:
             raise ValueError("支出与在途预占超过现金封顶")
         # P2：批量付费记账必须先过剪辑预演+样片审片（不伪造批准，只硬依赖）
-        if entry.get("batch") is True or entry.get("submission_phase") == "batch":
+        if (entry.get("batch") is True or entry.get("submission_phase") == "batch") and action in {'reserve', 'submit', 'retry'}:
             project_dir = entry.get("project_dir")
             if not project_dir:
                 raise ValueError("批量台账须提供 project_dir，以便核验审片批准")

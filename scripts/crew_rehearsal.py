@@ -176,6 +176,46 @@ def require_before_prompts(project):
     return report
 
 
+def current_report_errors(project):
+    """外部提交与审计共用：旧报告的通过字符串不能代替当前输入。"""
+    project = Path(project).resolve()
+    errors = []
+    required_inputs = {str(project/'state'/f'{name}.json'): project/'state'/f'{name}.json'
+                       for name in ('development', 'storyboard', 'sequence_direction')}
+    try:
+        sequence = json.loads((project/'state/sequence_direction.json').read_text(encoding='utf8'))
+        for source in sequence['sources'].values():
+            path = (project/source['path']).resolve()
+            required_inputs[str(path)] = path
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        errors.append('导演序列来源无法核验: ' + str(exc))
+    for filename, status, field, required in (
+        ('crew_pipeline.json', 'structural_pass', 'source_fingerprints',
+         {'development': project/'state/development.json', 'storyboard': project/'state/storyboard.json'}),
+        ('crew_rehearsal.json', 'design_ready_for_rehearsal', 'input_fingerprints',
+         required_inputs),
+    ):
+        try:
+            report = json.loads((project/'gates'/filename).read_text(encoding='utf8'))
+            if report.get('status') != status or report.get('errors') or report.get('structural_errors'):
+                errors.append(filename + ': 门禁未通过')
+            versions = report.get(field)
+            if not isinstance(versions, dict) or not versions:
+                errors.append(filename + ': 缺少输入指纹，须重新运行门禁')
+                continue
+            paths = required if filename == 'crew_pipeline.json' else {
+                key: project/str(key) for key in versions}
+            for key in required:
+                if key not in versions:
+                    errors.append(filename + ': 缺少输入指纹 ' + key)
+            for key, path in paths.items():
+                if not path.is_file() or versions.get(key) != digest(path):
+                    errors.append(filename + ': 输入指纹过期 ' + key)
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            errors.append(filename + ': 无法核验 ' + str(exc))
+    return errors
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='生成后端无关的剧组预演与部门返工制作桌')
     parser.add_argument('project', type=Path)

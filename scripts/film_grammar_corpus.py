@@ -156,8 +156,8 @@ def build_profile(records: list[dict[str, Any]], manifest: dict[str, Any], *,
         left == right for sequence in size_sequences for left, right in zip(sequence, sequence[1:])
     )
     total_pairs = sum(max(0, len(sequence) - 1) for sequence in size_sequences)
-    # 样本数达标 → production_reference，可供 enforce_envelope；未达标仍 exploratory_only。
-    status = "production_reference" if len(films) >= min_films else "exploratory_only"
+    # 数量仅是统计，不认证来源、标注质量或逐镜适用性。
+    status = "exploratory_only"
     scene_means = [sum(s["duration_sec"] for s in group)/len(group) for group in grouped.values()]
     by_film = defaultdict(list)
     for record in selected:
@@ -173,8 +173,8 @@ def build_profile(records: list[dict[str, Any]], manifest: dict[str, Any], *,
         "schema_version": 1,
         "profile_id": profile_id,
         "status": status,
-        "production_validation": {"status": "threshold_met" if len(films) >= min_films else "unverified",
-                                  "implemented": len(films) >= min_films,
+        "production_validation": {"status": "unverified",
+                                  "implemented": False,
                                   "sample_count_threshold_met": len(films) >= min_films},
         "selection": {"min_rating": min_rating, "minimum_films": min_films},
         "sample": {
@@ -220,8 +220,8 @@ def audit_storyboard(profile: dict[str, Any], storyboard: dict[str, Any], *,
     warnings: list[str] = []
     if profile.get("schema_version") != 1:
         errors.append("电影语法画像 schema_version 必须为 1")
-    if mode == "enforce_envelope" and profile.get("status") != "production_reference":
-        errors.append("样本影片数不足，exploratory_only 画像不能作为硬门禁；缺 corpus 阻断")
+    if mode == "enforce_envelope":
+        errors.append("生产语料认证未实现，enforce_envelope 不可用；样本影片数不足或自报 production_reference 均不能认证")
     shots = storyboard.get("shots") or []
     if not shots:
         errors.append("没有可审计镜头")
@@ -295,21 +295,22 @@ def audit_storyboard(profile: dict[str, Any], storyboard: dict[str, Any], *,
 
 def audit_binding(development: dict[str, Any], storyboard: dict[str, Any],
                   project: Path) -> dict[str, Any] | None:
-    """审计项目画像绑定；生产路径缺 corpus 直接阻断（不再返回 None 静默跳过）。"""
-    binding = development.get("grammar_reference")
-    if not binding:
-        return {"status": "blocked",
-                "errors": ["生产路径缺少电影语法画像绑定 grammar_reference（缺 corpus）"],
+    """画像是可选建议；一旦声明，仍须核验来源、指纹和实际使用模式。"""
+    if "grammar_reference" not in development:
+        return None
+    binding = development["grammar_reference"]
+    if not isinstance(binding, dict) or not binding:
+        return {"status": "blocked", "errors": ["电影语法画像绑定必须为非空对象"],
                 "warnings": [], "metrics": {}}
     required = ("profile_path", "profile_sha256", "profile_id", "mode", "rationale", "use_scope")
     missing = [field for field in required if binding.get(field) in (None, "", [], {})]
     if missing:
         return {"status": "blocked", "errors": ["电影语法画像绑定缺少: " + ",".join(missing)],
                 "warnings": [], "metrics": {}}
-    mode = str(binding.get("mode") or "enforce_envelope")
-    if mode != "enforce_envelope":
+    mode = str(binding["mode"])
+    if mode not in ALLOWED_MODES:
         return {"status": "blocked",
-                "errors": ["生产路径须 mode=enforce_envelope，禁止用 advisory 降级硬门禁"],
+                "errors": ["mode 必须为 advisory 或 enforce_envelope"],
                 "warnings": [], "metrics": {}}
     relative = Path(str(binding["profile_path"]))
     if relative.is_absolute() or ".." in relative.parts:
@@ -332,7 +333,7 @@ def audit_binding(development: dict[str, Any], storyboard: dict[str, Any],
     if binding["profile_id"] != profile.get("profile_id"):
         return {"status": "blocked", "errors": ["电影语法画像 profile_id 与绑定不一致"],
                 "warnings": [], "metrics": {}}
-    report = audit_storyboard(profile, storyboard, mode=str(binding["mode"]))
+    report = audit_storyboard(profile, storyboard, mode=mode)
     report["profile"] = {"path": str(relative), "sha256": actual,
                          "profile_id": profile.get("profile_id")}
     return report
